@@ -1,0 +1,6 @@
+# Configuration ShellCheck pour k8s-ops-toolkit
+shell=bash
+
+# SC1091 : ignore "not following sourced file" — normal car common.sh
+# est sourcé dynamiquement avec un chemin relatif
+disable=SC1091
