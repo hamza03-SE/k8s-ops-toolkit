@@ -1,0 +1,598 @@
+# K8s-Ops-Toolkit — Documentation complète
+
+Suite d'outils CLI en Bash pour l'automatisation de la supervision et de l'administration Kubernetes multi-cluster.
+
+**Version documentée** : état du projet après la Phase 4 (5 phases sur 9 terminées).
+
+> 💡 **Astuce** : chaque script du toolkit est auto-documenté. Ajoute `--help` à n'importe quelle commande pour voir toutes les options disponibles :
+> ```bash
+> scripts/cluster-health.sh --help
+> scripts/wait-for-rollout.sh --help
+> ```
+
+---
+
+## Sommaire
+
+1. [Présentation du projet](#1-présentation-du-projet)
+2. [Le problème résolu](#2-le-problème-résolu)
+3. [Les outils disponibles](#3-les-outils-disponibles)
+4. [Installation](#4-installation)
+5. [Configuration de l'accès à un cluster](#5-configuration-de-laccès-à-un-cluster)
+6. [`cluster-health.sh` — Documentation complète](#6-cluster-healthsh--documentation-complète)
+7. [`wait-for-rollout.sh` — Documentation complète](#7-wait-for-rolloutsh--documentation-complète)
+8. [Utiliser le toolkit dans un projet réel](#8-utiliser-le-toolkit-dans-un-projet-réel)
+9. [Intégration CI/CD](#9-intégration-cicd)
+10. [Sécurité](#10-sécurité)
+11. [Architecture technique](#11-architecture-technique)
+12. [Qualité et tests](#12-qualité-et-tests)
+13. [Dépannage (erreurs fréquentes)](#13-dépannage-erreurs-fréquentes)
+14. [État d'avancement et roadmap](#14-état-davancement-et-roadmap)
+
+---
+
+## 1. Présentation du projet
+
+K8s-Ops-Toolkit est une collection de scripts Bash professionnels, conçus pour automatiser les tâches répétitives de supervision et d'administration d'un environnement Kubernetes multi-cluster : santé des nodes et pods, attente de déploiement, nettoyage de logs, notifications — avec une intégration CI/CD native (codes de sortie standardisés, sortie JSON).
+
+Le projet est **open source**, sous licence **MIT**, pensé dès le départ pour être **générique** : aucune valeur codée en dur, fonctionne sur n'importe quel cluster (K3s, kubeadm, EKS, GKE, minikube) tant qu'un accès `kubectl` valide existe.
+
+---
+
+## 2. Le problème résolu
+
+Dans un environnement Kubernetes multi-cluster, l'administration quotidienne repose souvent sur des commandes `kubectl` lancées manuellement, une par une, cluster par cluster :
+
+- Vérifier si les nodes sont en bonne santé
+- Chercher les pods en erreur
+- Attendre qu'un déploiement soit prêt après un push CI/CD
+- Nettoyer des logs qui s'accumulent
+- Vérifier manuellement si un déploiement a réussi
+
+C'est répétitif, source d'erreur humaine, et ne produit pas de sortie exploitable automatiquement dans une pipeline. Chaque outil du toolkit répond à une étape précise de ce cycle.
+
+---
+
+## 3. Les outils disponibles
+
+| Script | Rôle | Statut |
+|---|---|---|
+| `cluster-health.sh` | Diagnostic de santé : nodes + détection multi-critères des pods en erreur, mono ou multi-cluster, sortie texte ou JSON | ✅ Fonctionnel |
+| `wait-for-rollout.sh` | Attend qu'un déploiement/daemonset/statefulset soit prêt, avec timeout et affichage des événements en cas d'échec | ✅ Fonctionnel |
+| `log-cleaner.sh` | Nettoyage standardisé des logs (journald, Elasticsearch), avec `--dry-run` | 🔲 À venir (Phase 5) |
+| `deploy-notify.sh` | Notification Slack/Discord de succès/échec de déploiement | 🔲 À venir (Phase 6) |
+
+Chaque script est **autonome** — tu peux utiliser un seul outil du toolkit sans avoir besoin des autres, seul `lib/common.sh` est une dépendance partagée.
+
+---
+
+## 4. Installation
+
+### 4.1 Prérequis
+
+| Outil | Rôle | Installation |
+|---|---|---|
+| `kubectl` | Interagir avec l'API Kubernetes | [kubernetes.io/docs/tasks/tools](https://kubernetes.io/docs/tasks/tools/) |
+| `jq` | Parser le JSON retourné par `kubectl -o json` | `sudo apt install jq` / `brew install jq` |
+| `git` | Récupérer le projet | `sudo apt install git` / `brew install git` |
+| Bash 4+ | Exécuter les scripts | Préinstallé sur la plupart des systèmes Linux/macOS |
+
+### 4.2 Utilisateurs Windows
+
+Les scripts sont écrits en Bash et ne s'exécutent pas nativement sur Windows. Utilise **WSL** (Windows Subsystem for Linux), officiel et gratuit :
+
+```powershell
+# Dans PowerShell, en administrateur
+wsl --install
+```
+
+Redémarre, puis ouvre le terminal **Ubuntu** installé automatiquement. Toutes les commandes de ce document s'exécutent dans ce terminal.
+
+### 4.3 Installer les prérequis (Debian/Ubuntu, y compris via WSL)
+
+```bash
+sudo apt update
+sudo apt install -y git jq curl openssh-client
+
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+```
+
+Vérifier :
+```bash
+kubectl version --client
+```
+
+### 4.4 Récupérer le toolkit
+
+```bash
+git clone https://github.com/TON_USERNAME/k8s-ops-toolkit.git
+cd k8s-ops-toolkit
+```
+
+> **Bonne pratique de sécurité** : évite toute méthode d'installation en `curl ... | bash`. Clone le repo et lis le code avant de l'exécuter — c'est l'intérêt même d'un outil open source.
+
+---
+
+## 5. Configuration de l'accès à un cluster
+
+### 5.1 Cas le plus courant : tu as déjà un accès `kubectl` fonctionnel
+
+Si tu travailles déjà dans un environnement Kubernetes, **aucune configuration supplémentaire n'est nécessaire**. Les scripts utilisent automatiquement :
+- le contexte actif par défaut de ton kubeconfig
+- tous les namespaces (sauf précision contraire)
+
+```bash
+scripts/cluster-health.sh
+```
+
+### 5.2 Tu dois récupérer l'accès à un cluster distant
+
+**Cluster kubeadm, sur un serveur accessible en SSH :**
+```bash
+ssh -p PORT_SSH user@IP_DU_SERVEUR "sudo cat /etc/kubernetes/admin.conf" > ~/mon-cluster.yaml
+export KUBECONFIG=~/mon-cluster.yaml
+kubectl get nodes   # vérifie que la connexion fonctionne
+```
+
+**Cluster K3s :**
+Le fichier équivalent se trouve à `/etc/rancher/k3s/k3s.yaml`. Attention : il contient généralement `server: https://127.0.0.1:6443` — remplace `127.0.0.1` par l'IP réelle du control-plane :
+```bash
+sed -i "s/127.0.0.1/IP_REELLE/" ~/mon-cluster.yaml
+```
+
+### 5.3 Gérer plusieurs clusters simultanément (fusion de kubeconfig)
+
+Pour garder l'accès à plusieurs clusters sans écraser ta configuration existante :
+
+```bash
+# Renommer le contexte si besoin (évite un conflit de nom)
+kubectl --kubeconfig ~/mon-cluster.yaml config rename-context NOM_ACTUEL mon-nouveau-cluster
+
+# Fusionner avec le kubeconfig existant
+KUBECONFIG=~/.kube/config:~/mon-cluster.yaml kubectl config view --flatten > ~/.kube/config-merged
+mv ~/.kube/config ~/.kube/config.bak
+mv ~/.kube/config-merged ~/.kube/config
+
+# Vérifier
+kubectl config get-contexts
+```
+
+### 5.4 Vérifier la connectivité réseau avant tout test
+
+```bash
+curl -k https://IP_DU_CLUSTER:6443/version
+```
+Si ça timeout, le firewall du serveur bloque probablement le port 6443 — il faudra soit l'ouvrir, soit passer par un tunnel SSH (`ssh -L 6443:localhost:6443 user@serveur`).
+
+---
+
+## 6. `cluster-health.sh` — Documentation complète
+
+### 6.1 Ce qu'il fait
+
+Vérifie l'état des nodes (`Ready` / `NotReady`) et détecte les pods en erreur selon **7 catégories** de statuts réels renvoyés par l'API Kubernetes, consolidées **une ligne par pod** :
+
+| Catégorie | Statuts détectés |
+|---|---|
+| Container en attente | `CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`, `CreateContainerConfigError`, `CreateContainerError`, `InvalidImageName` |
+| Container terminé en erreur | `Error`, `OOMKilled`, `ContainerStatusUnknown`, `DeadlineExceeded` |
+| Phase globale problématique | `Pending`, `Failed`, `Unknown` |
+| Suppression bloquée | `Terminating` depuis plus de 10 minutes |
+| Instabilité cachée | Redémarrages excessifs (> 5), même si le pod affiche `Running` |
+| Éviction | `Evicted` |
+
+Exécute uniquement des opérations en **lecture seule** (`get`, `list`) — aucun risque de modification du cluster.
+
+### 6.2 Options
+
+```
+Usage: cluster-health.sh [OPTIONS]
+
+OPTIONS:
+    -c, --context CONTEXT     Contexte kubectl à utiliser (défaut: contexte courant)
+    -n, --namespace NS        Limiter la vérification à un namespace (défaut: tous)
+    -a, --all-contexts        Vérifier tous les contextes du kubeconfig
+    -j, --json                Sortie au format JSON (pour intégration CI/CD)
+    -h, --help                Affiche cette aide
+```
+
+Toutes les options sont **optionnelles**. `--context` et `--all-contexts` sont mutuellement exclusifs.
+
+### 6.3 Exemples
+
+```bash
+# Vue globale du cluster actif (tous namespaces)
+scripts/cluster-health.sh
+
+# Un seul namespace
+scripts/cluster-health.sh --namespace production
+
+# Cibler un cluster précis parmi plusieurs
+scripts/cluster-health.sh --context nom-du-contexte
+
+# Scanner tous les clusters du kubeconfig
+scripts/cluster-health.sh --all-contexts
+
+# Sortie JSON, exploitable par un autre outil
+scripts/cluster-health.sh --all-contexts --json | jq .
+```
+
+### 6.4 Exemple de sortie texte
+
+```
+[INFO] Verification des nodes ...
+[ERROR] Nodes NotReady détectés :
+  - worker1
+  - worker2
+[INFO] Vérification des pods...
+[ERROR] Pods en erreur détectés :
+ticketing/auth-deployment-74958c5556-x54hw   ContainerStatusUnknown, Phase=Failed, 146 redémarrages, Evicted
+ticketing/redis-0                            Terminating bloqué depuis plus de 10min
+```
+
+### 6.5 Exemple de sortie JSON
+
+```json
+[
+  {
+    "context": "default",
+    "status": "issues_detected",
+    "not_ready_nodes": ["worker1", "worker2"],
+    "pod_errors": [
+      {
+        "pod": "ticketing/auth-deployment-74958c5556-x54hw",
+        "reasons": ["ContainerStatusUnknown", "Phase=Failed", "146 redémarrages", "Evicted"]
+      }
+    ]
+  }
+]
+```
+
+> **Important** : le JSON ne liste **que** les anomalies détectées — les pods sains (`Running`) ne sont jamais inclus. C'est volontaire : le script est un rapport d'exceptions, pas un inventaire complet. Ça rend la sortie directement exploitable pour une alerte automatisée (`length > 0` = problème).
+
+### 6.6 Codes de sortie
+
+| Code | Signification |
+|---|---|
+| `0` | Tout va bien sur tous les clusters vérifiés |
+| `1` | Au moins un problème détecté (node NotReady ou pod en erreur) sur au moins un cluster |
+
+Exploitable directement dans un script ou une pipeline :
+```bash
+scripts/cluster-health.sh || echo "Cluster en mauvaise santé, alerte à envoyer"
+```
+
+---
+
+## 7. `wait-for-rollout.sh` — Documentation complète
+
+### 7.1 Ce qu'il fait
+
+Attend qu'un déploiement Kubernetes (`Deployment`, `DaemonSet` ou `StatefulSet`) soit effectivement prêt, avec un timeout configurable. Utile en fin de pipeline CI/CD, juste après un `kubectl apply`, pour ne pas enchaîner sur les étapes suivantes (tests, notification) tant que le nouveau déploiement n'est pas réellement opérationnel.
+
+En cas d'échec ou de timeout, affiche automatiquement les derniers événements Kubernetes liés à la ressource, pour aider au diagnostic sans commande supplémentaire.
+
+### 7.2 Options
+
+```
+Usage: wait-for-rollout.sh --name NOM [OPTIONS]
+
+OPTIONS:
+    --name NAME                Nom de la ressource à surveiller (obligatoire)
+    -t, --type TYPE            Type de ressource: deployment|daemonset|statefulset (défaut: deployment)
+    -c, --context CONTEXT      Contexte kubectl à utiliser (défaut: contexte courant)
+    -n, --namespace NS         Namespace de la ressource (défaut: default)
+    --timeout SECONDS          Timeout en secondes (défaut: 300)
+    -h, --help                 Affiche cette aide
+```
+
+`--name` est **obligatoire** — sans lui, le script échoue immédiatement avec un message clair.
+
+### 7.3 Exemples
+
+```bash
+# Attendre un déploiement avec les valeurs par défaut (namespace "default", timeout 300s)
+scripts/wait-for-rollout.sh --name mon-app
+
+# Préciser namespace et timeout
+scripts/wait-for-rollout.sh --name mon-app --namespace production --timeout 120
+
+# Surveiller un StatefulSet plutôt qu'un Deployment
+scripts/wait-for-rollout.sh --name ma-base --type statefulset --namespace production
+```
+
+### 7.4 Exemple de sortie — succès
+
+```
+[INFO] Verification de l'existance de deployment/mon-app dans le namespace production...
+[INFO] Attendre rollout de deployment/mon-app (timeout: 120s)...
+deployment "mon-app" successfully rolled out
+[INFO] Rollout de deployment/mon-app termine avec succes.
+```
+
+### 7.5 Exemple de sortie — échec
+
+```
+[INFO] Verification de l'existance de deployment/mon-app dans le namespace production...
+[INFO] Attendre rollout de deployment/mon-app (timeout: 30s)...
+Waiting for deployment "mon-app" rollout to finish: 0 of 2 updated replicas are available...
+error: timed out waiting for the condition
+[ERROR] Rollout de deployment/mon-app echoue ou timeout depasse
+[WARN] Derniers evenements lies a cette ressource :
+production   Warning   BackOff   pod/mon-app-abc123   Back-off restarting failed container
+```
+
+### 7.6 Comportements de validation
+
+- Si la ressource n'existe pas → échec **immédiat**, sans attendre le timeout
+- Si `--type` n'est pas `deployment`, `daemonset` ou `statefulset` → échec immédiat
+- Si aucun événement récent n'est trouvé (ils expirent après ~1h dans Kubernetes) → message explicite plutôt qu'une section vide
+
+### 7.7 Codes de sortie
+
+| Code | Signification |
+|---|---|
+| `0` | Rollout terminé avec succès |
+| `1` | Ressource introuvable, type invalide, rollout échoué ou timeout dépassé |
+
+---
+
+## 8. Utiliser le toolkit dans un projet réel
+
+### 8.1 En tant qu'utilisateur / administrateur, à la main
+
+Cas d'usage quotidien : diagnostic rapide avant d'intervenir sur un cluster.
+
+```bash
+cd k8s-ops-toolkit
+scripts/cluster-health.sh --namespace mon-projet
+```
+
+### 8.2 Après un déploiement manuel
+
+```bash
+kubectl apply -f deployment.yaml
+scripts/wait-for-rollout.sh --name mon-app --namespace mon-projet --timeout 180
+```
+
+### 8.3 En combinaison dans un script de déploiement personnalisé
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+kubectl apply -f k8s/deployment.yaml
+
+if ../k8s-ops-toolkit/scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180; then
+    echo "Déploiement réussi, exécution des tests de fumée..."
+    ./smoke-tests.sh
+else
+    echo "Déploiement échoué, annulation..."
+    kubectl rollout undo deployment/mon-app -n prod
+    exit 1
+fi
+```
+
+### 8.4 Surveillance périodique (cron)
+
+```bash
+# Ajouter dans crontab -e : vérifie la santé du cluster toutes les 15 minutes
+*/15 * * * * /chemin/vers/k8s-ops-toolkit/scripts/cluster-health.sh --all-contexts || echo "Alerte: cluster en erreur" | mail -s "K8s Alert" toi@example.com
+```
+
+---
+
+## 9. Intégration CI/CD
+
+### 9.1 Exemple GitHub Actions
+
+```yaml
+name: Deploy
+on: push
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurer kubectl
+        run: echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
+
+      - name: Déployer
+        run: kubectl apply -f k8s/
+
+      - name: Attendre le rollout
+        run: |
+          git clone https://github.com/TON_USERNAME/k8s-ops-toolkit.git /tmp/toolkit
+          /tmp/toolkit/scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180
+
+      - name: Vérifier la santé du cluster après déploiement
+        run: /tmp/toolkit/scripts/cluster-health.sh --namespace prod --json > health-report.json
+
+      - name: Publier le rapport
+        uses: actions/upload-artifact@v4
+        with:
+          name: health-report
+          path: health-report.json
+```
+
+### 9.2 Exemple GitLab CI
+
+```yaml
+deploy:
+  stage: deploy
+  script:
+    - kubectl apply -f k8s/
+    - git clone https://github.com/TON_USERNAME/k8s-ops-toolkit.git /tmp/toolkit
+    - /tmp/toolkit/scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180
+    - /tmp/toolkit/scripts/cluster-health.sh --namespace prod
+  only:
+    - main
+```
+
+### 9.3 Exploiter la sortie JSON dans un script d'alerte
+
+```bash
+scripts/cluster-health.sh --all-contexts --json > /tmp/health.json
+
+# Nombre de clusters avec des problèmes
+ISSUES=$(jq '[.[] | select(.status == "issues_detected")] | length' /tmp/health.json)
+
+if [[ "$ISSUES" -gt 0 ]]; then
+    jq -r '.[] | select(.status == "issues_detected") | .context' /tmp/health.json
+    # envoyer une alerte Slack/email ici
+fi
+```
+
+---
+
+## 10. Sécurité
+
+### 10.1 Principes déjà appliqués
+
+- **Lecture seule** : aucun script actuel n'exécute de `delete`, `patch` ou `apply` — uniquement `get`/`list`/`rollout status`
+- **Zéro secret en dur** dans le code
+- **Quoting strict** de toutes les entrées utilisateur (`--context`, `--namespace`, `--name`) dans les appels `kubectl`, empêchant l'injection de commande
+
+### 10.2 Permissions minimales (RBAC)
+
+Le toolkit n'a besoin que d'un accès en lecture. Exemple de `ClusterRole` minimal :
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-ops-toolkit-readonly
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "pods", "events"]
+  verbs: ["get", "list"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets", "statefulsets"]
+  verbs: ["get", "list"]
+```
+
+### 10.3 Bonnes pratiques d'installation
+
+- Toujours cloner et lire le code avant exécution — jamais de `curl ... | bash`
+- Vérifier la syntaxe avant tout usage en production : `bash -n scripts/nom-du-script.sh`
+- Ne jamais committer de kubeconfig ou de token dans le repo
+
+### 10.4 Signaler une vulnérabilité
+
+Ne pas ouvrir d'issue publique. Contacter directement le mainteneur du projet.
+
+---
+
+## 11. Architecture technique
+
+```
+k8s-ops-toolkit/
+├── README.md
+├── LICENSE                      # MIT
+├── scripts/
+│   ├── cluster-health.sh        # ✅ Fonctionnel
+│   ├── wait-for-rollout.sh      # ✅ Fonctionnel
+│   ├── log-cleaner.sh           # 🔲 À venir
+│   └── deploy-notify.sh         # 🔲 À venir
+├── lib/
+│   └── common.sh                # Fonctions partagées
+├── tests/
+│   ├── cluster_health.bats
+│   └── wait-for-rollout.bats
+├── .github/
+│   └── workflows/               # 🔲 CI à venir
+└── .shellcheckrc
+```
+
+### 11.1 `lib/common.sh` — fonctions partagées
+
+| Fonction | Rôle |
+|---|---|
+| `log_info` | Affiche un message informatif en vert |
+| `log_warn` | Affiche un avertissement en jaune, vers stderr |
+| `log_error` | Affiche une erreur en rouge, vers stderr |
+| `check_dependency` | Vérifie qu'une commande (`kubectl`, `jq`...) est installée, sinon quitte avec un message clair |
+
+Centraliser ces fonctions évite de dupliquer le code de logging dans chaque script du toolkit.
+
+### 11.2 Principes de conception communs à tous les scripts
+
+- `set -euo pipefail` en tête de chaque script (arrêt sur erreur, variable non définie interdite, échec de pipe détecté)
+- Toutes les options sont passées via `--flag valeur`, jamais en positionnel
+- Toutes les variables utilisateur sont quotées (`"$VAR"`, `"${ARRAY[@]}"`) pour éviter l'injection
+- Codes de sortie standardisés : `0` = succès, `1` = problème détecté ou erreur d'usage
+
+---
+
+## 12. Qualité et tests
+
+### 12.1 Lancer les tests
+
+```bash
+sudo apt install -y bats
+bats tests/cluster_health.bats
+bats tests/wait-for-rollout.bats
+```
+
+### 12.2 Vérifier la syntaxe d'un script
+
+```bash
+bash -n scripts/nom-du-script.sh
+```
+
+### 12.3 Lint (à intégrer en Phase 7)
+
+```bash
+shellcheck scripts/*.sh lib/*.sh
+```
+
+### 12.4 Couverture actuelle des tests
+
+| Script | Tests bats |
+|---|---|
+| `cluster-health.sh` | Aide, option invalide, incompatibilité `--context`/`--all-contexts`, `--json` sans erreur |
+| `wait-for-rollout.sh` | Aide, `--name` obligatoire, type de ressource invalide, option invalide |
+
+---
+
+## 13. Dépannage (erreurs fréquentes)
+
+| Erreur rencontrée | Cause probable | Solution |
+|---|---|---|
+| `syntax error in conditional expression: unexpected token` | Fins de ligne Windows (CRLF) ou espace manquant avant `]]` | `sed -i 's/\r$//' fichier.sh`, ou vérifier l'espacement autour de `[[ ]]` |
+| `Permission denied` à l'exécution | Bit exécutable manquant | `chmod +x scripts/nom-du-script.sh` |
+| `unbound variable` sur un tableau | Accolades manquantes : `$VAR[@]` au lieu de `${VAR[@]}` | Toujours utiliser `"${ARRAY[@]}"` pour un tableau |
+| `command not found` en lançant le script | Script non trouvé dans le `$PATH` | Utiliser `./nom-du-script.sh` (si dans le dossier) ou `scripts/nom-du-script.sh` (chemin relatif) |
+| Push git rejeté (`non-fast-forward`) | Historique local et distant divergents (ex: PR mergée sur GitHub entre-temps) | `git config pull.rebase false && git pull origin main` puis `git push` |
+| JSON de `cluster-health.sh` ne montre qu'un seul contexte avec `--all-contexts` | Un seul contexte présent dans le kubeconfig | Normal si un seul cluster est configuré — pas un bug |
+
+---
+
+## 14. État d'avancement et roadmap
+
+| Phase | Contenu | Statut |
+|---|---|---|
+| 0 | Structure du repo, licence MIT, `common.sh` | ✅ Fait |
+| 1 | `cluster-health.sh` V1 — check des nodes | ✅ Fait |
+| 2 | `cluster-health.sh` V2 — détection complète des pods en erreur | ✅ Fait, validé sur clusters réels |
+| 3 | `cluster-health.sh` V3 — `--all-contexts` + `--json` | ✅ Fait |
+| 4 | `wait-for-rollout.sh` | ✅ Fait, validé sur clusters réels |
+| 5 | `log-cleaner.sh` (avec `--dry-run`) | 🔲 En cours |
+| 6 | `deploy-notify.sh` | 🔲 À venir |
+| 7 | CI/CD complet (shellcheck, bats, scan de sécurité, branch protection) | 🔲 À venir |
+| 8 | Documentation finale et présentation portfolio | 🔲 À venir |
+
+**Progression : 5/9 phases terminées.**
+
+### Évolutions futures envisagées
+- Mode `--watch` pour un monitoring continu
+- Export de métriques vers Prometheus
+- Fichier de configuration YAML pour seuils personnalisés
+- Packaging binaire unique (bashly, Homebrew)
+
+---
+
+*Document généré pour le projet K8s-Ops-Toolkit — reflète l'état du code à la fin de la Phase 4.*
