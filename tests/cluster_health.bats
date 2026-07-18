@@ -15,3 +15,14 @@ setup() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"Option inconnue"* ]]
 }
+
+@test "refuse de combiner --context et --all-contexts" {
+    run "$SCRIPT" --context foo --all-contexts
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Impossible de combiner"* ]]
+}
+
+@test "accepte --json avec --help sans erreur" {
+    run "$SCRIPT" --json --help
+    [ "$status" -eq 0 ]
+}
