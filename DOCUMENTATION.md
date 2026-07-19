@@ -2,12 +2,13 @@
 
 Suite d'outils CLI en Bash pour l'automatisation de la supervision et de l'administration Kubernetes multi-cluster.
 
-**Version documentée** : état du projet après la Phase 4 (5 phases sur 9 terminées).
+**Version documentée** : état du projet après la Phase 5 (6 phases sur 9 terminées).
 
 > 💡 **Astuce** : chaque script du toolkit est auto-documenté. Ajoute `--help` à n'importe quelle commande pour voir toutes les options disponibles :
 > ```bash
 > scripts/cluster-health.sh --help
 > scripts/wait-for-rollout.sh --help
+> scripts/log-cleaner.sh --help
 > ```
 
 ---
@@ -21,13 +22,14 @@ Suite d'outils CLI en Bash pour l'automatisation de la supervision et de l'admin
 5. [Configuration de l'accès à un cluster](#5-configuration-de-laccès-à-un-cluster)
 6. [`cluster-health.sh` — Documentation complète](#6-cluster-healthsh--documentation-complète)
 7. [`wait-for-rollout.sh` — Documentation complète](#7-wait-for-rolloutsh--documentation-complète)
-8. [Utiliser le toolkit dans un projet réel](#8-utiliser-le-toolkit-dans-un-projet-réel)
-9. [Intégration CI/CD](#9-intégration-cicd)
-10. [Sécurité](#10-sécurité)
-11. [Architecture technique](#11-architecture-technique)
-12. [Qualité et tests](#12-qualité-et-tests)
-13. [Dépannage (erreurs fréquentes)](#13-dépannage-erreurs-fréquentes)
-14. [État d'avancement et roadmap](#14-état-davancement-et-roadmap)
+8. [`log-cleaner.sh` — Documentation complète](#8-log-cleanersh--documentation-complète)
+9. [Utiliser le toolkit dans un projet réel](#9-utiliser-le-toolkit-dans-un-projet-réel)
+10. [Intégration CI/CD](#10-intégration-cicd)
+11. [Sécurité](#11-sécurité)
+12. [Architecture technique](#12-architecture-technique)
+13. [Qualité et tests](#13-qualité-et-tests)
+14. [Dépannage (erreurs fréquentes)](#14-dépannage-erreurs-fréquentes)
+15. [État d'avancement et roadmap](#15-état-davancement-et-roadmap)
 
 ---
 
@@ -59,7 +61,7 @@ C'est répétitif, source d'erreur humaine, et ne produit pas de sortie exploita
 |---|---|---|
 | `cluster-health.sh` | Diagnostic de santé : nodes + détection multi-critères des pods en erreur, mono ou multi-cluster, sortie texte ou JSON | ✅ Fonctionnel |
 | `wait-for-rollout.sh` | Attend qu'un déploiement/daemonset/statefulset soit prêt, avec timeout et affichage des événements en cas d'échec | ✅ Fonctionnel |
-| `log-cleaner.sh` | Nettoyage standardisé des logs (journald, Elasticsearch), avec `--dry-run` | 🔲 À venir (Phase 5) |
+| `log-cleaner.sh` | Nettoyage standardisé des logs (journald, Elasticsearch, Loki), avec `--dry-run` par défaut | ✅ Fonctionnel (journald testé sur cluster réel ; Elasticsearch/Loki en cours de validation) |
 | `deploy-notify.sh` | Notification Slack/Discord de succès/échec de déploiement | 🔲 À venir (Phase 6) |
 
 Chaque script est **autonome** — tu peux utiliser un seul outil du toolkit sans avoir besoin des autres, seul `lib/common.sh` est une dépendance partagée.
@@ -338,9 +340,108 @@ production   Warning   BackOff   pod/mon-app-abc123   Back-off restarting failed
 
 ---
 
-## 8. Utiliser le toolkit dans un projet réel
+## 8. `log-cleaner.sh` — Documentation complète
 
-### 8.1 En tant qu'utilisateur / administrateur, à la main
+### 8.1 Ce qu'il fait
+
+Nettoie les logs qui s'accumulent sur trois cibles possibles : **journald** (logs système du node), **Elasticsearch** (indices anciens d'une stack de logging), ou **Loki** (suppression de logs par sélecteur de labels LogQL).
+
+> **Sécurité par défaut** : le script fonctionne en **dry-run par défaut** — il affiche uniquement ce qui *serait* supprimé, sans jamais rien supprimer réellement. La suppression effective nécessite le flag explicite `--apply`. Aucun chemin du code n'exécute d'action destructive tant que `--apply` n'est pas passé.
+
+### 8.2 Options
+
+```
+Usage: log-cleaner.sh [OPTIONS]
+
+MODE PAR DEFAUT : dry-run (previsualisation uniquement, aucune suppression).
+Ajouter --apply pour executer la suppression reelle.
+
+OPTIONS:
+    --target TARGET            Cible: journald|elasticsearch|loki (defaut: journald)
+    --age DAYS                 Age en jours au-dela duquel supprimer (defaut: 30)
+    --es-url URL                URL de l'API Elasticsearch (requis si --target elasticsearch)
+    --es-index-prefix PREFIX    Prefixe des indices a cibler (requis si --target elasticsearch)
+    --es-password PASSWORD      Mot de passe du compte elastic (requis si --target elasticsearch)
+    --loki-url URL              URL de l'API Loki (requis si --target loki)
+    --loki-label-selector SEL   Selecteur de label LogQL, ex: '{namespace="ticketing"}' (requis si --target loki)
+    --apply                     Execute reellement la suppression (defaut: dry-run)
+    -h, --help                  Affiche cette aide
+```
+
+Lancé sans aucun argument, le script affiche directement l'aide plutôt que d'échouer silencieusement.
+
+### 8.3 Exemples
+
+```bash
+# Previsualiser le nettoyage journald (aucune suppression) — cible et mode par defaut
+scripts/log-cleaner.sh
+
+# Previsualiser avec un age precis
+scripts/log-cleaner.sh --target journald --age 30
+
+# Executer reellement le nettoyage journald
+scripts/log-cleaner.sh --target journald --age 30 --apply
+
+# Previsualiser le nettoyage Elasticsearch
+scripts/log-cleaner.sh --target elasticsearch \
+  --es-url https://localhost:9200 --es-index-prefix logs- \
+  --es-password 'motdepasse' --age 60
+
+# Previsualiser le nettoyage Loki
+scripts/log-cleaner.sh --target loki \
+  --loki-url http://localhost:3100 \
+  --loki-label-selector '{namespace="ticketing"}' --age 14
+```
+
+> **Bonne pratique** : ne jamais passer `--es-password` en clair dans un script versionné ou un historique de commandes partagé. Préférer une variable d'environnement (`--es-password "$ES_PASSWORD"`) alimentée depuis un secret manager ou les secrets CI/CD.
+
+### 8.4 Exemple de sortie — dry-run journald
+
+```
+[INFO] === MODE DRY-RUN (aucune suppression ne sera effectuee) ===
+[INFO] Ajoute --apply pour executer reellement le nettoyage.
+[INFO] Cible: journald | Age: 30 jours
+[INFO] Taille actuelle des logs journald:
+Archived and active journals take up 512.0M in the file system.
+[INFO] [DRY-RUN] Commande qui serait executee : journalctl --vacuum-time=30d
+[INFO] [DRY-RUN] Cela supprimerait les entrees journald plus vieilles que 30 jours.
+```
+
+### 8.5 Exemple de sortie — dry-run Elasticsearch
+
+```
+[INFO] === MODE DRY-RUN (aucune suppression ne sera effectuee) ===
+[INFO] Cible: Elasticsearch (https://localhost:9200) | Prefixe: logs- | Age: 60 jours
+[INFO] Indices concernes :
+  - logs-2026.04.01
+  - logs-2026.04.02
+[INFO] [DRY-RUN] Ces indices seraient supprimes avec --apply. Aucune suppression effectuee.
+```
+
+### 8.6 Comportements de validation
+
+- `--target` doit être l'une des 3 valeurs acceptées, sinon échec immédiat
+- `--age` doit être un entier positif, sinon échec immédiat (empêche par exemple `--age -5` ou une faute de frappe de passer silencieusement)
+- Les options spécifiques à une cible (`--es-url`, `--es-index-prefix`, `--es-password` pour Elasticsearch ; `--loki-url`, `--loki-label-selector` pour Loki) sont vérifiées comme obligatoires uniquement quand cette cible est sélectionnée
+
+### 8.7 Codes de sortie
+
+| Code | Signification |
+|---|---|
+| `0` | Prévisualisation ou nettoyage terminé sans erreur |
+| `1` | Option invalide, cible injoignable, ou paramètre requis manquant |
+
+### 8.8 Recommandations avant d'utiliser `--apply`
+
+1. Toujours relancer la commande en dry-run juste avant d'ajouter `--apply`, pour vérifier une dernière fois ce qui va être touché
+2. Pour un premier test réel sur un environnement sensible, utiliser un seuil d'âge volontairement très élevé (ex: `--age 9999`) afin de valider le mécanisme sans rien supprimer d'important
+3. Ne jamais tester `--apply` en premier sur un cluster de production sans validation préalable sur un environnement moins critique
+
+---
+
+## 9. Utiliser le toolkit dans un projet réel
+
+### 9.1 En tant qu'utilisateur / administrateur, à la main
 
 Cas d'usage quotidien : diagnostic rapide avant d'intervenir sur un cluster.
 
@@ -349,14 +450,14 @@ cd k8s-ops-toolkit
 scripts/cluster-health.sh --namespace mon-projet
 ```
 
-### 8.2 Après un déploiement manuel
+### 9.2 Après un déploiement manuel
 
 ```bash
 kubectl apply -f deployment.yaml
 scripts/wait-for-rollout.sh --name mon-app --namespace mon-projet --timeout 180
 ```
 
-### 8.3 En combinaison dans un script de déploiement personnalisé
+### 9.3 En combinaison dans un script de déploiement personnalisé
 
 ```bash
 #!/usr/bin/env bash
@@ -374,18 +475,21 @@ else
 fi
 ```
 
-### 8.4 Surveillance périodique (cron)
+### 9.4 Surveillance périodique (cron)
 
 ```bash
 # Ajouter dans crontab -e : vérifie la santé du cluster toutes les 15 minutes
 */15 * * * * /chemin/vers/k8s-ops-toolkit/scripts/cluster-health.sh --all-contexts || echo "Alerte: cluster en erreur" | mail -s "K8s Alert" toi@example.com
+
+# Nettoyage hebdomadaire des logs journald (tous les dimanches a 3h, execution reelle)
+0 3 * * 0 /chemin/vers/k8s-ops-toolkit/scripts/log-cleaner.sh --target journald --age 30 --apply
 ```
 
 ---
 
-## 9. Intégration CI/CD
+## 10. Intégration CI/CD
 
-### 9.1 Exemple GitHub Actions
+### 10.1 Exemple GitHub Actions
 
 ```yaml
 name: Deploy
@@ -418,7 +522,7 @@ jobs:
           path: health-report.json
 ```
 
-### 9.2 Exemple GitLab CI
+### 10.2 Exemple GitLab CI
 
 ```yaml
 deploy:
@@ -432,7 +536,7 @@ deploy:
     - main
 ```
 
-### 9.3 Exploiter la sortie JSON dans un script d'alerte
+### 10.3 Exploiter la sortie JSON dans un script d'alerte
 
 ```bash
 scripts/cluster-health.sh --all-contexts --json > /tmp/health.json
@@ -446,17 +550,31 @@ if [[ "$ISSUES" -gt 0 ]]; then
 fi
 ```
 
+### 10.4 Nettoyage de logs en fin de pipeline de maintenance
+
+```yaml
+cleanup-logs:
+  stage: maintenance
+  script:
+    - scripts/log-cleaner.sh --target elasticsearch --es-url "$ES_URL" --es-index-prefix logs- --es-password "$ES_PASSWORD" --age 60 --apply
+  only:
+    - schedules
+```
+
+> En CI/CD, `--es-password` doit toujours provenir d'une variable secrète du pipeline (`$ES_PASSWORD`), jamais écrite en clair dans le fichier de configuration.
+
 ---
 
-## 10. Sécurité
+## 11. Sécurité
 
-### 10.1 Principes déjà appliqués
+### 11.1 Principes déjà appliqués
 
-- **Lecture seule** : aucun script actuel n'exécute de `delete`, `patch` ou `apply` — uniquement `get`/`list`/`rollout status`
-- **Zéro secret en dur** dans le code
-- **Quoting strict** de toutes les entrées utilisateur (`--context`, `--namespace`, `--name`) dans les appels `kubectl`, empêchant l'injection de commande
+- **Lecture seule pour `cluster-health.sh` et `wait-for-rollout.sh`** : ces deux scripts n'exécutent que des opérations `get`/`list`/`rollout status`, aucun risque de modification du cluster
+- **`log-cleaner.sh` supprime réellement des données (journald, Elasticsearch, Loki), mais uniquement avec `--apply` explicite** : le mode par défaut est un dry-run qui n'exécute jamais d'action destructive — voir [section 8](#8-log-cleanersh--documentation-complète)
+- **Zéro secret en dur** dans le code — les identifiants (`--es-password`) sont passés en argument, jamais codés en dur
+- **Quoting strict** de toutes les entrées utilisateur (`--context`, `--namespace`, `--name`, `--es-*`, `--loki-*`) dans les appels `kubectl`/`curl`, empêchant l'injection de commande
 
-### 10.2 Permissions minimales (RBAC)
+### 11.2 Permissions minimales (RBAC)
 
 Le toolkit n'a besoin que d'un accès en lecture. Exemple de `ClusterRole` minimal :
 
@@ -474,19 +592,20 @@ rules:
   verbs: ["get", "list"]
 ```
 
-### 10.3 Bonnes pratiques d'installation
+### 11.3 Bonnes pratiques d'installation
 
 - Toujours cloner et lire le code avant exécution — jamais de `curl ... | bash`
 - Vérifier la syntaxe avant tout usage en production : `bash -n scripts/nom-du-script.sh`
-- Ne jamais committer de kubeconfig ou de token dans le repo
+- Ne jamais committer de kubeconfig, de token ou de mot de passe (`--es-password`) dans le repo
+- Pour `log-cleaner.sh`, toujours tester en dry-run avant tout `--apply` (voir [8.8](#88-recommandations-avant-dutiliser---apply))
 
-### 10.4 Signaler une vulnérabilité
+### 11.4 Signaler une vulnérabilité
 
 Ne pas ouvrir d'issue publique. Contacter directement le mainteneur du projet.
 
 ---
 
-## 11. Architecture technique
+## 12. Architecture technique
 
 ```
 k8s-ops-toolkit/
@@ -495,19 +614,20 @@ k8s-ops-toolkit/
 ├── scripts/
 │   ├── cluster-health.sh        # ✅ Fonctionnel
 │   ├── wait-for-rollout.sh      # ✅ Fonctionnel
-│   ├── log-cleaner.sh           # 🔲 À venir
+│   ├── log-cleaner.sh           # ✅ Fonctionnel (journald valide, ES/Loki en cours)
 │   └── deploy-notify.sh         # 🔲 À venir
 ├── lib/
 │   └── common.sh                # Fonctions partagées
 ├── tests/
 │   ├── cluster_health.bats
-│   └── wait-for-rollout.bats
+│   ├── wait-for-rollout.bats
+│   └── log-cleaner.bats         # A completer
 ├── .github/
 │   └── workflows/               # 🔲 CI à venir
 └── .shellcheckrc
 ```
 
-### 11.1 `lib/common.sh` — fonctions partagées
+### 12.1 `lib/common.sh` — fonctions partagées
 
 | Fonction | Rôle |
 |---|---|
@@ -518,47 +638,50 @@ k8s-ops-toolkit/
 
 Centraliser ces fonctions évite de dupliquer le code de logging dans chaque script du toolkit.
 
-### 11.2 Principes de conception communs à tous les scripts
+### 12.2 Principes de conception communs à tous les scripts
 
 - `set -euo pipefail` en tête de chaque script (arrêt sur erreur, variable non définie interdite, échec de pipe détecté)
 - Toutes les options sont passées via `--flag valeur`, jamais en positionnel
 - Toutes les variables utilisateur sont quotées (`"$VAR"`, `"${ARRAY[@]}"`) pour éviter l'injection
 - Codes de sortie standardisés : `0` = succès, `1` = problème détecté ou erreur d'usage
+- Pour les scripts pouvant supprimer des données (`log-cleaner.sh`), toute action destructive est isolée derrière un flag explicite (`--apply`), jamais exécutée par défaut
 
 ---
 
-## 12. Qualité et tests
+## 13. Qualité et tests
 
-### 12.1 Lancer les tests
+### 13.1 Lancer les tests
 
 ```bash
 sudo apt install -y bats
 bats tests/cluster_health.bats
 bats tests/wait-for-rollout.bats
+bats tests/log-cleaner.bats
 ```
 
-### 12.2 Vérifier la syntaxe d'un script
+### 13.2 Vérifier la syntaxe d'un script
 
 ```bash
 bash -n scripts/nom-du-script.sh
 ```
 
-### 12.3 Lint (à intégrer en Phase 7)
+### 13.3 Lint (à intégrer en Phase 7)
 
 ```bash
 shellcheck scripts/*.sh lib/*.sh
 ```
 
-### 12.4 Couverture actuelle des tests
+### 13.4 Couverture actuelle des tests
 
 | Script | Tests bats |
 |---|---|
 | `cluster-health.sh` | Aide, option invalide, incompatibilité `--context`/`--all-contexts`, `--json` sans erreur |
 | `wait-for-rollout.sh` | Aide, `--name` obligatoire, type de ressource invalide, option invalide |
+| `log-cleaner.sh` | À compléter (Phase 5 en finalisation) |
 
 ---
 
-## 13. Dépannage (erreurs fréquentes)
+## 14. Dépannage (erreurs fréquentes)
 
 | Erreur rencontrée | Cause probable | Solution |
 |---|---|---|
@@ -568,10 +691,11 @@ shellcheck scripts/*.sh lib/*.sh
 | `command not found` en lançant le script | Script non trouvé dans le `$PATH` | Utiliser `./nom-du-script.sh` (si dans le dossier) ou `scripts/nom-du-script.sh` (chemin relatif) |
 | Push git rejeté (`non-fast-forward`) | Historique local et distant divergents (ex: PR mergée sur GitHub entre-temps) | `git config pull.rebase false && git pull origin main` puis `git push` |
 | JSON de `cluster-health.sh` ne montre qu'un seul contexte avec `--all-contexts` | Un seul contexte présent dans le kubeconfig | Normal si un seul cluster est configuré — pas un bug |
+| `log-cleaner.sh --target loki` répond toujours "requis" pour `--loki-label-selector` même quand l'option est fournie | Faute de frappe classique : la variable de destination ne correspond pas à celle déclarée/utilisée ailleurs dans le script | Vérifier avec `grep -n "NOM_VARIABLE" script.sh` que le nom est identique partout (déclaration, `case`, usage) |
 
 ---
 
-## 14. État d'avancement et roadmap
+## 15. État d'avancement et roadmap
 
 | Phase | Contenu | Statut |
 |---|---|---|
@@ -580,12 +704,12 @@ shellcheck scripts/*.sh lib/*.sh
 | 2 | `cluster-health.sh` V2 — détection complète des pods en erreur | ✅ Fait, validé sur clusters réels |
 | 3 | `cluster-health.sh` V3 — `--all-contexts` + `--json` | ✅ Fait |
 | 4 | `wait-for-rollout.sh` | ✅ Fait, validé sur clusters réels |
-| 5 | `log-cleaner.sh` (avec `--dry-run`) | 🔲 En cours |
+| 5 | `log-cleaner.sh` (dry-run par défaut, journald/Elasticsearch/Loki) | ✅ journald validé sur cluster réel ; Elasticsearch et Loki en cours de configuration/validation ; tests bats à écrire |
 | 6 | `deploy-notify.sh` | 🔲 À venir |
 | 7 | CI/CD complet (shellcheck, bats, scan de sécurité, branch protection) | 🔲 À venir |
 | 8 | Documentation finale et présentation portfolio | 🔲 À venir |
 
-**Progression : 5/9 phases terminées.**
+**Progression : 6/9 phases largement entamées (5 closes, Phase 5 en finalisation).**
 
 ### Évolutions futures envisagées
 - Mode `--watch` pour un monitoring continu
@@ -595,4 +719,4 @@ shellcheck scripts/*.sh lib/*.sh
 
 ---
 
-*Document généré pour le projet K8s-Ops-Toolkit — reflète l'état du code à la fin de la Phase 4.*
+*Document généré pour le projet K8s-Ops-Toolkit — reflète l'état du code à la fin de la Phase 5.*
