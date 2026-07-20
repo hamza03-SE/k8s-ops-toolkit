@@ -106,7 +106,7 @@ check_cluster() {
         [[ -n "$not_ready_nodes" ]] && ctx_exit_code=1
 
         local pods_json
-        pods_json=$(kubectl --context "$ctx" get pods $NS_FLAG -o json)
+        pods_json=$(kubectl --context "$ctx" get pods "$NS_FLAG" -o json)
 
         local waiting_pods terminated_pods phase_issues stuck_terminating high_restart_pods evicted_pods
         waiting_pods=$(echo "$pods_json" | jq -r '
