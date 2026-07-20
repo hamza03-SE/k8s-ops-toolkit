@@ -1,5 +1,7 @@
 # K8s-Ops-Toolkit — Documentation complète
 
+![CI](https://github.com/hamza03-SE/k8s-ops-toolkit/actions/workflows/ci.yml/badge.svg)
+
 Suite d'outils CLI en Bash pour l'automatisation de la supervision et de l'administration Kubernetes multi-cluster.
 
 **Version documentée** : état du projet après la Phase 5 (6 phases sur 9 terminées).
