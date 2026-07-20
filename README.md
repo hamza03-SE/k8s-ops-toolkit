@@ -1,1 +1,1 @@
-Voir la documentation pour plus d'information sur le projet.
+Voir la documentation pour plus d'informations sur le projet.
