@@ -4,13 +4,14 @@
 
 Suite d'outils CLI en Bash pour l'automatisation de la supervision et de l'administration Kubernetes multi-cluster.
 
-**Version documentée** : état du projet après la Phase 5 (6 phases sur 9 terminées).
+**Version documentée** : projet terminé — 9 phases sur 9 complétées.
 
 > 💡 **Astuce** : chaque script du toolkit est auto-documenté. Ajoute `--help` à n'importe quelle commande pour voir toutes les options disponibles :
 > ```bash
 > scripts/cluster-health.sh --help
 > scripts/wait-for-rollout.sh --help
 > scripts/log-cleaner.sh --help
+> scripts/deploy-notify.sh --help
 > ```
 
 ---
@@ -25,21 +26,24 @@ Suite d'outils CLI en Bash pour l'automatisation de la supervision et de l'admin
 6. [`cluster-health.sh` — Documentation complète](#6-cluster-healthsh--documentation-complète)
 7. [`wait-for-rollout.sh` — Documentation complète](#7-wait-for-rolloutsh--documentation-complète)
 8. [`log-cleaner.sh` — Documentation complète](#8-log-cleanersh--documentation-complète)
-9. [Utiliser le toolkit dans un projet réel](#9-utiliser-le-toolkit-dans-un-projet-réel)
-10. [Intégration CI/CD](#10-intégration-cicd)
-11. [Sécurité](#11-sécurité)
-12. [Architecture technique](#12-architecture-technique)
-13. [Qualité et tests](#13-qualité-et-tests)
-14. [Dépannage (erreurs fréquentes)](#14-dépannage-erreurs-fréquentes)
-15. [État d'avancement et roadmap](#15-état-davancement-et-roadmap)
+9. [`deploy-notify.sh` — Documentation complète](#9-deploy-notifysh--documentation-complète)
+10. [Utiliser le toolkit dans un projet réel](#10-utiliser-le-toolkit-dans-un-projet-réel)
+11. [Intégration CI/CD](#11-intégration-cicd)
+12. [Sécurité](#12-sécurité)
+13. [Architecture technique](#13-architecture-technique)
+14. [Qualité et tests](#14-qualité-et-tests)
+15. [Dépannage (erreurs fréquentes)](#15-dépannage-erreurs-fréquentes)
+16. [État d'avancement et bilan du projet](#16-état-davancement-et-bilan-du-projet)
 
 ---
 
 ## 1. Présentation du projet
 
-K8s-Ops-Toolkit est une collection de scripts Bash professionnels, conçus pour automatiser les tâches répétitives de supervision et d'administration d'un environnement Kubernetes multi-cluster : santé des nodes et pods, attente de déploiement, nettoyage de logs, notifications — avec une intégration CI/CD native (codes de sortie standardisés, sortie JSON).
+K8s-Ops-Toolkit est une collection de scripts Bash professionnels, conçus pour automatiser les tâches répétitives de supervision et d'administration d'un environnement Kubernetes multi-cluster : santé des nodes et pods, attente de déploiement, nettoyage de logs, notifications de déploiement — avec une intégration CI/CD native (codes de sortie standardisés, sortie JSON).
 
 Le projet est **open source**, sous licence **MIT**, pensé dès le départ pour être **générique** : aucune valeur codée en dur, fonctionne sur n'importe quel cluster (K3s, kubeadm, EKS, GKE, minikube) tant qu'un accès `kubectl` valide existe.
+
+Le projet est aujourd'hui **complet** : les 4 outils sont fonctionnels et validés, la CI/CD (lint, tests, scan de sécurité) est en place et verte, et la documentation est à jour.
 
 ---
 
@@ -61,10 +65,10 @@ C'est répétitif, source d'erreur humaine, et ne produit pas de sortie exploita
 
 | Script | Rôle | Statut |
 |---|---|---|
-| `cluster-health.sh` | Diagnostic de santé : nodes + détection multi-critères des pods en erreur, mono ou multi-cluster, sortie texte ou JSON | ✅ Fonctionnel |
-| `wait-for-rollout.sh` | Attend qu'un déploiement/daemonset/statefulset soit prêt, avec timeout et affichage des événements en cas d'échec | ✅ Fonctionnel |
-| `log-cleaner.sh` | Nettoyage standardisé des logs (journald, Elasticsearch, Loki), avec `--dry-run` par défaut | ✅ Fonctionnel (journald testé sur cluster réel ; Elasticsearch/Loki en cours de validation) |
-| `deploy-notify.sh` | Notification Slack/Discord de succès/échec de déploiement | 🔲 À venir (Phase 6) |
+| `cluster-health.sh` | Diagnostic de santé : nodes + détection multi-critères des pods en erreur, mono ou multi-cluster, sortie texte ou JSON | ✅ Fonctionnel, validé sur clusters réels |
+| `wait-for-rollout.sh` | Attend qu'un déploiement/daemonset/statefulset soit prêt, avec timeout et affichage des événements en cas d'échec | ✅ Fonctionnel, validé sur clusters réels |
+| `log-cleaner.sh` | Nettoyage standardisé des logs (journald, Elasticsearch, Loki), avec `--dry-run` par défaut | ✅ Fonctionnel — journald, Elasticsearch et Loki tous validés |
+| `deploy-notify.sh` | Notification Slack/Discord de succès/échec de déploiement | ✅ Fonctionnel |
 
 Chaque script est **autonome** — tu peux utiliser un seul outil du toolkit sans avoir besoin des autres, seul `lib/common.sh` est une dépendance partagée.
 
@@ -78,6 +82,7 @@ Chaque script est **autonome** — tu peux utiliser un seul outil du toolkit san
 |---|---|---|
 | `kubectl` | Interagir avec l'API Kubernetes | [kubernetes.io/docs/tasks/tools](https://kubernetes.io/docs/tasks/tools/) |
 | `jq` | Parser le JSON retourné par `kubectl -o json` | `sudo apt install jq` / `brew install jq` |
+| `curl` | Envoyer les notifications webhook (`deploy-notify.sh`), requêtes Elasticsearch/Loki | Préinstallé sur la plupart des systèmes |
 | `git` | Récupérer le projet | `sudo apt install git` / `brew install git` |
 | Bash 4+ | Exécuter les scripts | Préinstallé sur la plupart des systèmes Linux/macOS |
 
@@ -110,7 +115,7 @@ kubectl version --client
 ### 4.4 Récupérer le toolkit
 
 ```bash
-git clone https://github.com/TON_USERNAME/k8s-ops-toolkit.git
+git clone https://github.com/hamza03-SE/k8s-ops-toolkit.git
 cd k8s-ops-toolkit
 ```
 
@@ -146,8 +151,6 @@ sed -i "s/127.0.0.1/IP_REELLE/" ~/mon-cluster.yaml
 ```
 
 ### 5.3 Gérer plusieurs clusters simultanément (fusion de kubeconfig)
-
-Pour garder l'accès à plusieurs clusters sans écraser ta configuration existante :
 
 ```bash
 # Renommer le contexte si besoin (évite un conflit de nom)
@@ -346,7 +349,7 @@ production   Warning   BackOff   pod/mon-app-abc123   Back-off restarting failed
 
 ### 8.1 Ce qu'il fait
 
-Nettoie les logs qui s'accumulent sur trois cibles possibles : **journald** (logs système du node), **Elasticsearch** (indices anciens d'une stack de logging), ou **Loki** (suppression de logs par sélecteur de labels LogQL).
+Nettoie les logs qui s'accumulent sur trois cibles possibles : **journald** (logs système du node), **Elasticsearch** (indices anciens d'une stack de logging), ou **Loki** (suppression de logs par sélecteur de labels LogQL). Les trois cibles sont validées sur environnement réel.
 
 > **Sécurité par défaut** : le script fonctionne en **dry-run par défaut** — il affiche uniquement ce qui *serait* supprimé, sans jamais rien supprimer réellement. La suppression effective nécessite le flag explicite `--apply`. Aucun chemin du code n'exécute d'action destructive tant que `--apply` n'est pas passé.
 
@@ -384,15 +387,21 @@ scripts/log-cleaner.sh --target journald --age 30
 # Executer reellement le nettoyage journald
 scripts/log-cleaner.sh --target journald --age 30 --apply
 
-# Previsualiser le nettoyage Elasticsearch
+# Nettoyage Elasticsearch (previsualisation puis execution)
 scripts/log-cleaner.sh --target elasticsearch \
   --es-url https://localhost:9200 --es-index-prefix logs- \
-  --es-password 'motdepasse' --age 60
+  --es-password "$ES_PASSWORD" --age 60
+scripts/log-cleaner.sh --target elasticsearch \
+  --es-url https://localhost:9200 --es-index-prefix logs- \
+  --es-password "$ES_PASSWORD" --age 60 --apply
 
-# Previsualiser le nettoyage Loki
+# Nettoyage Loki (previsualisation puis execution)
 scripts/log-cleaner.sh --target loki \
   --loki-url http://localhost:3100 \
   --loki-label-selector '{namespace="ticketing"}' --age 14
+scripts/log-cleaner.sh --target loki \
+  --loki-url http://localhost:3100 \
+  --loki-label-selector '{namespace="ticketing"}' --age 14 --apply
 ```
 
 > **Bonne pratique** : ne jamais passer `--es-password` en clair dans un script versionné ou un historique de commandes partagé. Préférer une variable d'environnement (`--es-password "$ES_PASSWORD"`) alimentée depuis un secret manager ou les secrets CI/CD.
@@ -420,20 +429,29 @@ Archived and active journals take up 512.0M in the file system.
 [INFO] [DRY-RUN] Ces indices seraient supprimes avec --apply. Aucune suppression effectuee.
 ```
 
-### 8.6 Comportements de validation
+### 8.6 Exemple de sortie — dry-run Loki
+
+```
+[INFO] === MODE DRY-RUN (aucune suppression ne sera effectuee) ===
+[INFO] Cible: Loki (http://localhost:3100) | Selecteur: {namespace="ticketing"} | Age: 14 jours
+[INFO] [DRY-RUN] Requete de suppression qui serait envoyee a l'API Loki (/loki/api/v1/delete)
+[INFO] [DRY-RUN] Aucune suppression effectuee.
+```
+
+### 8.7 Comportements de validation
 
 - `--target` doit être l'une des 3 valeurs acceptées, sinon échec immédiat
 - `--age` doit être un entier positif, sinon échec immédiat (empêche par exemple `--age -5` ou une faute de frappe de passer silencieusement)
 - Les options spécifiques à une cible (`--es-url`, `--es-index-prefix`, `--es-password` pour Elasticsearch ; `--loki-url`, `--loki-label-selector` pour Loki) sont vérifiées comme obligatoires uniquement quand cette cible est sélectionnée
 
-### 8.7 Codes de sortie
+### 8.8 Codes de sortie
 
 | Code | Signification |
 |---|---|
 | `0` | Prévisualisation ou nettoyage terminé sans erreur |
 | `1` | Option invalide, cible injoignable, ou paramètre requis manquant |
 
-### 8.8 Recommandations avant d'utiliser `--apply`
+### 8.9 Recommandations avant d'utiliser `--apply`
 
 1. Toujours relancer la commande en dry-run juste avant d'ajouter `--apply`, pour vérifier une dernière fois ce qui va être touché
 2. Pour un premier test réel sur un environnement sensible, utiliser un seuil d'âge volontairement très élevé (ex: `--age 9999`) afin de valider le mécanisme sans rien supprimer d'important
@@ -441,46 +459,119 @@ Archived and active journals take up 512.0M in the file system.
 
 ---
 
-## 9. Utiliser le toolkit dans un projet réel
+## 9. `deploy-notify.sh` — Documentation complète
 
-### 9.1 En tant qu'utilisateur / administrateur, à la main
+### 9.1 Ce qu'il fait
 
-Cas d'usage quotidien : diagnostic rapide avant d'intervenir sur un cluster.
+Envoie une notification vers un webhook Slack ou Discord pour signaler le résultat d'un déploiement (succès ou échec), afin d'éviter la vérification manuelle post-déploiement. Conçu pour être appelé en toute fin de pipeline CI/CD, après `wait-for-rollout.sh` et/ou `cluster-health.sh`.
+
+N'exécute aucune opération sur le cluster — uniquement un appel HTTP sortant vers l'URL de webhook fournie.
+
+### 9.2 Options
+
+```
+Usage: deploy-notify.sh --status STATUS --app NOM [OPTIONS]
+
+OPTIONS:
+    --status STATUS            Résultat du déploiement: success|failure (obligatoire)
+    --app NAME                 Nom de l'application déployée (obligatoire)
+    --webhook-url URL          URL du webhook (ou variable d'env WEBHOOK_URL)
+    --channel-type TYPE        slack|discord (défaut: slack)
+    --message TEXT              Message additionnel optionnel (ex: version, environnement)
+    -h, --help                  Affiche cette aide
+```
+
+`--status` et `--app` sont **obligatoires**. `--webhook-url` peut être omis si la variable d'environnement `WEBHOOK_URL` est définie — c'est la méthode recommandée en CI/CD pour ne jamais exposer l'URL en clair.
+
+### 9.3 Exemples
+
+```bash
+# Notification de succès (URL via variable d'environnement, recommandé)
+export WEBHOOK_URL="https://hooks.slack.com/services/XXX/YYY/ZZZ"
+scripts/deploy-notify.sh --status success --app mon-app
+
+# Notification d'échec avec message additionnel
+scripts/deploy-notify.sh --status failure --app mon-app \
+  --message "Rollout timeout après 180s sur namespace production"
+
+# Vers un webhook Discord
+scripts/deploy-notify.sh --status success --app mon-app \
+  --channel-type discord --webhook-url "https://discord.com/api/webhooks/XXX/YYY"
+```
+
+### 9.4 Utilisation typique en fin de pipeline
+
+```bash
+if scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180; then
+    scripts/deploy-notify.sh --status success --app mon-app
+else
+    scripts/deploy-notify.sh --status failure --app mon-app --message "Rollout échoué"
+    exit 1
+fi
+```
+
+### 9.5 Comportements de validation
+
+- `--status` doit être `success` ou `failure`, sinon échec immédiat
+- Si ni `--webhook-url` ni `WEBHOOK_URL` ne sont fournis → échec immédiat avec message explicite
+- `--channel-type` doit être `slack` ou `discord`, sinon échec immédiat
+- Le format du payload JSON envoyé s'adapte automatiquement au type de canal choisi
+
+### 9.6 Codes de sortie
+
+| Code | Signification |
+|---|---|
+| `0` | Notification envoyée avec succès (webhook a répondu correctement) |
+| `1` | Paramètre invalide/manquant, ou échec d'envoi du webhook |
+
+---
+
+## 10. Utiliser le toolkit dans un projet réel
+
+### 10.1 En tant qu'utilisateur / administrateur, à la main
 
 ```bash
 cd k8s-ops-toolkit
 scripts/cluster-health.sh --namespace mon-projet
 ```
 
-### 9.2 Après un déploiement manuel
+### 10.2 Après un déploiement manuel
 
 ```bash
 kubectl apply -f deployment.yaml
 scripts/wait-for-rollout.sh --name mon-app --namespace mon-projet --timeout 180
 ```
 
-### 9.3 En combinaison dans un script de déploiement personnalisé
+### 10.3 Pipeline de déploiement complète (les 4 outils enchaînés)
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
+export WEBHOOK_URL="https://hooks.slack.com/services/XXX/YYY/ZZZ"
+
 kubectl apply -f k8s/deployment.yaml
 
-if ../k8s-ops-toolkit/scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180; then
-    echo "Déploiement réussi, exécution des tests de fumée..."
-    ./smoke-tests.sh
+if ./scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180; then
+    if ./scripts/cluster-health.sh --namespace prod; then
+        ./scripts/deploy-notify.sh --status success --app mon-app
+        echo "Déploiement réussi, exécution des tests de fumée..."
+        ./smoke-tests.sh
+    else
+        ./scripts/deploy-notify.sh --status failure --app mon-app --message "Cluster en erreur après déploiement"
+        exit 1
+    fi
 else
-    echo "Déploiement échoué, annulation..."
+    ./scripts/deploy-notify.sh --status failure --app mon-app --message "Rollout échoué ou timeout"
     kubectl rollout undo deployment/mon-app -n prod
     exit 1
 fi
 ```
 
-### 9.4 Surveillance périodique (cron)
+### 10.4 Surveillance périodique (cron)
 
 ```bash
-# Ajouter dans crontab -e : vérifie la santé du cluster toutes les 15 minutes
+# Vérifie la santé du cluster toutes les 15 minutes
 */15 * * * * /chemin/vers/k8s-ops-toolkit/scripts/cluster-health.sh --all-contexts || echo "Alerte: cluster en erreur" | mail -s "K8s Alert" toi@example.com
 
 # Nettoyage hebdomadaire des logs journald (tous les dimanches a 3h, execution reelle)
@@ -489,9 +580,19 @@ fi
 
 ---
 
-## 10. Intégration CI/CD
+## 11. Intégration CI/CD
 
-### 10.1 Exemple GitHub Actions
+### 11.1 Pipeline CI du projet lui-même
+
+Le repo dispose de sa propre CI (`.github/workflows/ci.yml`), déclenchée à chaque push, avec 3 jobs :
+
+| Job | Rôle |
+|---|---|
+| `lint` | `shellcheck` sur tous les scripts et `lib/common.sh` |
+| `tests` | Exécution de la suite `bats` complète |
+| `security-scan` | `Gitleaks` — détection de secrets accidentellement commités |
+
+### 11.2 Exemple GitHub Actions (utilisation du toolkit dans un projet tiers)
 
 ```yaml
 name: Deploy
@@ -511,11 +612,22 @@ jobs:
 
       - name: Attendre le rollout
         run: |
-          git clone https://github.com/TON_USERNAME/k8s-ops-toolkit.git /tmp/toolkit
+          git clone https://github.com/hamza03-SE/k8s-ops-toolkit.git /tmp/toolkit
           /tmp/toolkit/scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180
 
       - name: Vérifier la santé du cluster après déploiement
         run: /tmp/toolkit/scripts/cluster-health.sh --namespace prod --json > health-report.json
+
+      - name: Notifier le résultat
+        if: always()
+        env:
+          WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            /tmp/toolkit/scripts/deploy-notify.sh --status success --app mon-app
+          else
+            /tmp/toolkit/scripts/deploy-notify.sh --status failure --app mon-app
+          fi
 
       - name: Publier le rapport
         uses: actions/upload-artifact@v4
@@ -524,26 +636,27 @@ jobs:
           path: health-report.json
 ```
 
-### 10.2 Exemple GitLab CI
+### 11.3 Exemple GitLab CI
 
 ```yaml
 deploy:
   stage: deploy
   script:
     - kubectl apply -f k8s/
-    - git clone https://github.com/TON_USERNAME/k8s-ops-toolkit.git /tmp/toolkit
+    - git clone https://github.com/hamza03-SE/k8s-ops-toolkit.git /tmp/toolkit
     - /tmp/toolkit/scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180
     - /tmp/toolkit/scripts/cluster-health.sh --namespace prod
+  after_script:
+    - /tmp/toolkit/scripts/deploy-notify.sh --status "$CI_JOB_STATUS" --app mon-app
   only:
     - main
 ```
 
-### 10.3 Exploiter la sortie JSON dans un script d'alerte
+### 11.4 Exploiter la sortie JSON dans un script d'alerte
 
 ```bash
 scripts/cluster-health.sh --all-contexts --json > /tmp/health.json
 
-# Nombre de clusters avec des problèmes
 ISSUES=$(jq '[.[] | select(.status == "issues_detected")] | length' /tmp/health.json)
 
 if [[ "$ISSUES" -gt 0 ]]; then
@@ -552,7 +665,7 @@ if [[ "$ISSUES" -gt 0 ]]; then
 fi
 ```
 
-### 10.4 Nettoyage de logs en fin de pipeline de maintenance
+### 11.5 Nettoyage de logs en fin de pipeline de maintenance
 
 ```yaml
 cleanup-logs:
@@ -563,22 +676,24 @@ cleanup-logs:
     - schedules
 ```
 
-> En CI/CD, `--es-password` doit toujours provenir d'une variable secrète du pipeline (`$ES_PASSWORD`), jamais écrite en clair dans le fichier de configuration.
+> En CI/CD, `--es-password` et `WEBHOOK_URL` doivent toujours provenir de variables secrètes du pipeline, jamais écrites en clair dans le fichier de configuration.
 
 ---
 
-## 11. Sécurité
+## 12. Sécurité
 
-### 11.1 Principes déjà appliqués
+### 12.1 Principes appliqués
 
 - **Lecture seule pour `cluster-health.sh` et `wait-for-rollout.sh`** : ces deux scripts n'exécutent que des opérations `get`/`list`/`rollout status`, aucun risque de modification du cluster
-- **`log-cleaner.sh` supprime réellement des données (journald, Elasticsearch, Loki), mais uniquement avec `--apply` explicite** : le mode par défaut est un dry-run qui n'exécute jamais d'action destructive — voir [section 8](#8-log-cleanersh--documentation-complète)
-- **Zéro secret en dur** dans le code — les identifiants (`--es-password`) sont passés en argument, jamais codés en dur
+- **`log-cleaner.sh` supprime réellement des données (journald, Elasticsearch, Loki), mais uniquement avec `--apply` explicite** : le mode par défaut est un dry-run qui n'exécute jamais d'action destructive
+- **`deploy-notify.sh` n'a aucun accès au cluster** : simple appel HTTP sortant vers un webhook
+- **Zéro secret en dur** dans le code — identifiants et URLs (`--es-password`, `WEBHOOK_URL`) passés en argument ou variable d'environnement, jamais codés en dur
 - **Quoting strict** de toutes les entrées utilisateur (`--context`, `--namespace`, `--name`, `--es-*`, `--loki-*`) dans les appels `kubectl`/`curl`, empêchant l'injection de commande
+- **Scan automatique des secrets** (Gitleaks) à chaque push via la CI
 
-### 11.2 Permissions minimales (RBAC)
+### 12.2 Permissions minimales (RBAC)
 
-Le toolkit n'a besoin que d'un accès en lecture. Exemple de `ClusterRole` minimal :
+Le toolkit n'a besoin que d'un accès en lecture pour `cluster-health.sh` et `wait-for-rollout.sh`. Exemple de `ClusterRole` minimal (voir `examples/rbac-readonly.yaml`) :
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -594,53 +709,63 @@ rules:
   verbs: ["get", "list"]
 ```
 
-### 11.3 Bonnes pratiques d'installation
+### 12.3 Bonnes pratiques d'installation
 
 - Toujours cloner et lire le code avant exécution — jamais de `curl ... | bash`
 - Vérifier la syntaxe avant tout usage en production : `bash -n scripts/nom-du-script.sh`
-- Ne jamais committer de kubeconfig, de token ou de mot de passe (`--es-password`) dans le repo
-- Pour `log-cleaner.sh`, toujours tester en dry-run avant tout `--apply` (voir [8.8](#88-recommandations-avant-dutiliser---apply))
+- Ne jamais committer de kubeconfig, de token, de mot de passe ou d'URL de webhook dans le repo
+- Pour `log-cleaner.sh`, toujours tester en dry-run avant tout `--apply` (voir [8.9](#89-recommandations-avant-dutiliser---apply))
 
-### 11.4 Signaler une vulnérabilité
+### 12.4 Protection de la branche `main`
 
-Ne pas ouvrir d'issue publique. Contacter directement le mainteneur du projet.
+Le repo GitHub applique une règle de protection sur `main` : Pull Request + approbation requises avant fusion, avec bypass réservé aux administrateurs (usage solo). Configuration visible dans **Settings → Branches**.
+
+### 12.5 Signaler une vulnérabilité
+
+Ne pas ouvrir d'issue publique. Contacter directement le mainteneur du projet (voir `SECURITY.md`).
 
 ---
 
-## 12. Architecture technique
+## 13. Architecture technique
 
 ```
 k8s-ops-toolkit/
 ├── README.md
+├── DOCUMENTATION.md
+├── SECURITY.md
 ├── LICENSE                      # MIT
 ├── scripts/
 │   ├── cluster-health.sh        # ✅ Fonctionnel
 │   ├── wait-for-rollout.sh      # ✅ Fonctionnel
-│   ├── log-cleaner.sh           # ✅ Fonctionnel (journald valide, ES/Loki en cours)
-│   └── deploy-notify.sh         # 🔲 À venir
+│   ├── log-cleaner.sh           # ✅ Fonctionnel (journald, ES, Loki)
+│   └── deploy-notify.sh         # ✅ Fonctionnel
 ├── lib/
 │   └── common.sh                # Fonctions partagées
+├── examples/
+│   └── rbac-readonly.yaml       # RBAC minimal en lecture seule
 ├── tests/
 │   ├── cluster_health.bats
 │   ├── wait-for-rollout.bats
-│   └── log-cleaner.bats         # A completer
+│   ├── log-cleaner.bats
+│   └── deploy-notify.bats
 ├── .github/
-│   └── workflows/               # 🔲 CI à venir
+│   └── workflows/
+│       └── ci.yml               # lint + tests + security-scan
 └── .shellcheckrc
 ```
 
-### 12.1 `lib/common.sh` — fonctions partagées
+### 13.1 `lib/common.sh` — fonctions partagées
 
 | Fonction | Rôle |
 |---|---|
 | `log_info` | Affiche un message informatif en vert |
 | `log_warn` | Affiche un avertissement en jaune, vers stderr |
 | `log_error` | Affiche une erreur en rouge, vers stderr |
-| `check_dependency` | Vérifie qu'une commande (`kubectl`, `jq`...) est installée, sinon quitte avec un message clair |
+| `check_dependency` | Vérifie qu'une commande (`kubectl`, `jq`, `curl`...) est installée, sinon quitte avec un message clair |
 
 Centraliser ces fonctions évite de dupliquer le code de logging dans chaque script du toolkit.
 
-### 12.2 Principes de conception communs à tous les scripts
+### 13.2 Principes de conception communs à tous les scripts
 
 - `set -euo pipefail` en tête de chaque script (arrêt sur erreur, variable non définie interdite, échec de pipe détecté)
 - Toutes les options sont passées via `--flag valeur`, jamais en positionnel
@@ -650,40 +775,54 @@ Centraliser ces fonctions évite de dupliquer le code de logging dans chaque scr
 
 ---
 
-## 13. Qualité et tests
+## 14. Qualité et tests
 
-### 13.1 Lancer les tests
+### 14.1 Lancer les tests
 
 ```bash
 sudo apt install -y bats
 bats tests/cluster_health.bats
 bats tests/wait-for-rollout.bats
 bats tests/log-cleaner.bats
+bats tests/deploy-notify.bats
 ```
 
-### 13.2 Vérifier la syntaxe d'un script
+### 14.2 Vérifier la syntaxe d'un script
 
 ```bash
 bash -n scripts/nom-du-script.sh
 ```
 
-### 13.3 Lint (à intégrer en Phase 7)
+### 14.3 Lint
 
 ```bash
 shellcheck scripts/*.sh lib/*.sh
 ```
 
-### 13.4 Couverture actuelle des tests
+Exécuté automatiquement en CI à chaque push.
+
+### 14.4 Couverture des tests
 
 | Script | Tests bats |
 |---|---|
 | `cluster-health.sh` | Aide, option invalide, incompatibilité `--context`/`--all-contexts`, `--json` sans erreur |
 | `wait-for-rollout.sh` | Aide, `--name` obligatoire, type de ressource invalide, option invalide |
-| `log-cleaner.sh` | À compléter (Phase 5 en finalisation) |
+| `log-cleaner.sh` | Aide, `--target` invalide, `--age` invalide, options spécifiques manquantes par cible, comportement dry-run par défaut |
+| `deploy-notify.sh` | Aide, `--status` invalide, absence de webhook (arg et variable d'env), `--channel-type` invalide |
+
+### 14.5 CI/CD du projet
+
+3 jobs exécutés à chaque push sur `.github/workflows/ci.yml` :
+
+| Job | Outil | Statut |
+|---|---|---|
+| `lint` | shellcheck | ✅ Vert |
+| `tests` | bats | ✅ Vert |
+| `security-scan` | Gitleaks | ✅ Vert |
 
 ---
 
-## 14. Dépannage (erreurs fréquentes)
+## 15. Dépannage (erreurs fréquentes)
 
 | Erreur rencontrée | Cause probable | Solution |
 |---|---|---|
@@ -691,13 +830,15 @@ shellcheck scripts/*.sh lib/*.sh
 | `Permission denied` à l'exécution | Bit exécutable manquant | `chmod +x scripts/nom-du-script.sh` |
 | `unbound variable` sur un tableau | Accolades manquantes : `$VAR[@]` au lieu de `${VAR[@]}` | Toujours utiliser `"${ARRAY[@]}"` pour un tableau |
 | `command not found` en lançant le script | Script non trouvé dans le `$PATH` | Utiliser `./nom-du-script.sh` (si dans le dossier) ou `scripts/nom-du-script.sh` (chemin relatif) |
-| Push git rejeté (`non-fast-forward`) | Historique local et distant divergents (ex: PR mergée sur GitHub entre-temps) | `git config pull.rebase false && git pull origin main` puis `git push` |
+| Push git rejeté (`non-fast-forward`) | Historique local et distant divergents | `git config pull.rebase false && git pull origin main` puis `git push` |
+| `SC2086` (shellcheck) sur une variable non quotée | Variable utilisée sans guillemets dans une commande | Toujours quoter : `"$VAR"` au lieu de `$VAR` |
 | JSON de `cluster-health.sh` ne montre qu'un seul contexte avec `--all-contexts` | Un seul contexte présent dans le kubeconfig | Normal si un seul cluster est configuré — pas un bug |
-| `log-cleaner.sh --target loki` répond toujours "requis" pour `--loki-label-selector` même quand l'option est fournie | Faute de frappe classique : la variable de destination ne correspond pas à celle déclarée/utilisée ailleurs dans le script | Vérifier avec `grep -n "NOM_VARIABLE" script.sh` que le nom est identique partout (déclaration, `case`, usage) |
+| `deploy-notify.sh` échoue avec "webhook manquant" | Ni `--webhook-url` ni `WEBHOOK_URL` définis | Exporter `WEBHOOK_URL` ou passer `--webhook-url` explicitement |
+| "Bypassed rule violations" à chaque push | Comportement normal : admin qui contourne légitimement la branch protection | Rien à corriger — voir section 12.4 |
 
 ---
 
-## 15. État d'avancement et roadmap
+## 16. État d'avancement et bilan du projet
 
 | Phase | Contenu | Statut |
 |---|---|---|
@@ -706,19 +847,23 @@ shellcheck scripts/*.sh lib/*.sh
 | 2 | `cluster-health.sh` V2 — détection complète des pods en erreur | ✅ Fait, validé sur clusters réels |
 | 3 | `cluster-health.sh` V3 — `--all-contexts` + `--json` | ✅ Fait |
 | 4 | `wait-for-rollout.sh` | ✅ Fait, validé sur clusters réels |
-| 5 | `log-cleaner.sh` (dry-run par défaut, journald/Elasticsearch/Loki) | ✅ journald validé sur cluster réel ; Elasticsearch et Loki en cours de configuration/validation ; tests bats à écrire |
-| 6 | `deploy-notify.sh` | 🔲 À venir |
-| 7 | CI/CD complet (shellcheck, bats, scan de sécurité, branch protection) | 🔲 À venir |
-| 8 | Documentation finale et présentation portfolio | 🔲 À venir |
+| 5 | `log-cleaner.sh` (journald, Elasticsearch, Loki, dry-run par défaut) | ✅ Fait, les 3 cibles validées, tests bats complets |
+| 6 | `deploy-notify.sh` | ✅ Fait |
+| 7 | CI/CD complet (shellcheck, bats, Gitleaks, branch protection) | ✅ Fait, 3 jobs verts |
+| 8 | Documentation finale et présentation portfolio | ✅ Fait |
 
-**Progression : 6/9 phases largement entamées (5 closes, Phase 5 en finalisation).**
+**Progression : 9/9 phases terminées. Projet complet.**
 
-### Évolutions futures envisagées
-- Mode `--watch` pour un monitoring continu
-- Export de métriques vers Prometheus
+### Évolutions futures envisagées (hors périmètre initial)
+- Mode `--watch` pour un monitoring continu (au lieu d'un snapshot ponctuel)
+- Export de métriques vers Prometheus (textfile collector)
 - Fichier de configuration YAML pour seuils personnalisés
 - Packaging binaire unique (bashly, Homebrew)
+- Tests d'intégration sur un second type de cluster (minikube) en plus de kubeadm/K3s
+
+### Pitch pour CV / entretien
+> Développement d'une suite d'outils CLI Bash open source (K8s-Ops-Toolkit) automatisant la supervision multi-cluster Kubernetes — santé de cluster, attente de rollout, nettoyage de logs (journald/Elasticsearch/Loki), notifications de déploiement — intégrée en CI/CD avec tests automatisés (bats), lint (shellcheck) et scan de sécurité (Gitleaks).
 
 ---
 
-*Document généré pour le projet K8s-Ops-Toolkit — reflète l'état du code à la fin de la Phase 5.*
+*Document généré pour le projet K8s-Ops-Toolkit — reflète l'état final du code, les 9 phases étant terminées.*
