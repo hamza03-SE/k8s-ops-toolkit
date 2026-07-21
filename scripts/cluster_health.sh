@@ -10,8 +10,8 @@ ALL_CONTEXTS=false
 JSON_OUTPUT=false
 
 usage() {
-    cat << EOF
-Usage: $(basename "$0") [OPTIONS]
+    cat << 'USAGE_EOF'
+Usage: cluster_health.sh [OPTIONS]
 
 Verifie la sante d'un ou plusieurs clusters Kubernetes : etat des nodes et pods en erreur.
 
@@ -21,7 +21,7 @@ OPTIONS:
     -a, --all-contexts        Verifier tous les contextes du kubeconfig
     -j, --json                Sortie au format JSON (pour integration CI/CD)
     -h, --help                Affiche cette aide
-EOF
+USAGE_EOF
 }
 
 while [[ $# -gt 0 ]]; do
@@ -144,12 +144,20 @@ check_cluster() {
             "$stuck_terminating" "$high_restart_pods" "$evicted_pods" \
             | grep -v '^$' || true)
 
+        # NOTE (correctif) : meme quand $raw est vide, "echo "$raw"" produit
+        # une ligne vide envoyee a awk. Sans le filtre "/^$/ { next }",
+        # awk traitait cette ligne vide comme un enregistrement valide et
+        # produisait une entree fantome ": " dans all_errors, ce qui
+        # declenchait un faux positif "Pods en erreur detectes" meme sur
+        # un cluster 100% sain. Le filtre ci-dessous ignore les lignes
+        # vides avant tout traitement.
         all_errors=$(echo "$raw" | awk -F': ' '
+            /^$/ { next }
             {
                 split(reasons[$1], seen, ", ")
                 found = 0
                 for (i in seen) if (seen[i] == $2) found = 1
-                if (!found) reasons[$1] = reasons[$1] ? reasons[$1] ", " $2 : $2
+                if (!found) reasons[$1] = reasons[$1] ", " $2 : $2
             }
             END { for (pod in reasons) print pod ": " reasons[pod] }
         ' | sort)
