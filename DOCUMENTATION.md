@@ -39,7 +39,7 @@ Suite d'outils CLI en Bash pour l'automatisation de la supervision et de l'admin
 
 ## 1. Présentation du projet
 
-K8s-Ops-Toolkit est une collection de scripts Bash professionnels, conçus pour automatiser les tâches répétitives de supervision et d'administration d'un environnement Kubernetes multi-cluster : santé des nodes et pods, attente de déploiement, nettoyage de logs, notifications de déploiement — avec une intégration CI/CD native (codes de sortie standardisés, sortie JSON).
+K8s-Ops-Toolkit est une collection de scripts Bash professionnels, conçus pour automatiser les tâches répétitives de supervision et d'administration d'un environnement Kubernetes multi-cluster : santé des nodes et pods, attente de déploiement, nettoyage de logs, notifications de déploiement par email — avec une intégration CI/CD native (codes de sortie standardisés, sortie JSON).
 
 Le projet est **open source**, sous licence **MIT**, pensé dès le départ pour être **générique** : aucune valeur codée en dur, fonctionne sur n'importe quel cluster (K3s, kubeadm, EKS, GKE, minikube) tant qu'un accès `kubectl` valide existe.
 
@@ -68,7 +68,7 @@ C'est répétitif, source d'erreur humaine, et ne produit pas de sortie exploita
 | `cluster-health.sh` | Diagnostic de santé : nodes + détection multi-critères des pods en erreur, mono ou multi-cluster, sortie texte ou JSON | ✅ Fonctionnel, validé sur clusters réels |
 | `wait-for-rollout.sh` | Attend qu'un déploiement/daemonset/statefulset soit prêt, avec timeout et affichage des événements en cas d'échec | ✅ Fonctionnel, validé sur clusters réels |
 | `log-cleaner.sh` | Nettoyage standardisé des logs (journald, Elasticsearch, Loki), avec `--dry-run` par défaut | ✅ Fonctionnel — journald, Elasticsearch et Loki tous validés |
-| `deploy-notify.sh` | Notification par email (SMTP) de succès/échec de déploiement | ✅ Fonctionnel |
+| `deploy-notify.sh` | Notification **par email (SMTP)** de succès/échec de déploiement | ✅ Fonctionnel, validé (envoi réel testé via Gmail SMTP) |
 
 Chaque script est **autonome** — tu peux utiliser un seul outil du toolkit sans avoir besoin des autres, seul `lib/common.sh` est une dépendance partagée.
 
@@ -82,10 +82,9 @@ Chaque script est **autonome** — tu peux utiliser un seul outil du toolkit san
 |---|---|---|
 | `kubectl` | Interagir avec l'API Kubernetes | [kubernetes.io/docs/tasks/tools](https://kubernetes.io/docs/tasks/tools/) |
 | `jq` | Parser le JSON retourné par `kubectl -o json` | `sudo apt install jq` / `brew install jq` |
-| `curl` | Requêtes Elasticsearch/Loki (`log-cleaner.sh`) | Préinstallé sur la plupart des systèmes |
+| `curl` | Envoyer les emails via SMTP (`deploy-notify.sh`), requêtes Elasticsearch/Loki | Préinstallé sur la plupart des systèmes |
 | `git` | Récupérer le projet | `sudo apt install git` / `brew install git` |
 | Bash 4+ | Exécuter les scripts | Préinstallé sur la plupart des systèmes Linux/macOS |
-| Client SMTP (`sendmail`/`msmtp`/équivalent) | Envoi des emails (`deploy-notify.sh`) | `sudo apt install msmtp` (ou équivalent) |
 
 ### 4.2 Utilisateurs Windows
 
@@ -464,60 +463,63 @@ Archived and active journals take up 512.0M in the file system.
 
 ### 9.1 Ce qu'il fait
 
-Envoie une notification **par email**, via un serveur **SMTP**, pour signaler le résultat d'un déploiement (succès ou échec), afin d'éviter la vérification manuelle post-déploiement. Conçu pour être appelé en toute fin de pipeline CI/CD, après `wait-for-rollout.sh` et/ou `cluster-health.sh`.
+Envoie une notification **par email, via un serveur SMTP**, pour signaler le résultat d'un déploiement (succès ou échec), afin d'éviter la vérification manuelle post-déploiement. Conçu pour être appelé en toute fin de pipeline CI/CD, après `wait-for-rollout.sh` et/ou `cluster-health.sh`.
 
-N'exécute aucune opération sur le cluster — uniquement une connexion SMTP sortante vers le serveur mail fourni.
+N'exécute aucune opération sur le cluster — uniquement un envoi SMTP via `curl` vers le serveur mail fourni.
 
 ### 9.2 Options
 
 ```
-Usage: deploy-notify.sh --status STATUS --app NOM [OPTIONS]
+Usage: deploy-notify.sh --status success|failure --app NOM [OPTIONS]
+
+Envoie une notification de deploiement par email (via SMTP).
+
+Variables d'environnement requises (jamais en argument) :
+    SMTP_SERVER       Ex: smtp.gmail.com
+    SMTP_PORT         Ex: 587
+    SMTP_USER         Adresse d'envoi (ex: alertes@example.com)
+    SMTP_PASSWORD     Mot de passe ou mot de passe d'application
+    EMAIL_TO          Destinataire(s), separes par des virgules
+
+OPTIONS OBLIGATOIRES:
+    --status STATUS          Statut du deploiement: success|failure
+    --app NAME                Nom de l'application deployee
 
 OPTIONS:
-    --status STATUS             Résultat du déploiement: success|failure (obligatoire)
-    --app NAME                  Nom de l'application déployée (obligatoire)
-    --env ENV                   Environnement concerné (ex: test, production) (optionnel)
-    --smtp-server SERVER        Serveur SMTP (ou variable d'env SMTP_SERVER)
-    --smtp-port PORT            Port SMTP (ou variable d'env SMTP_PORT, défaut: 587)
-    --smtp-user USER            Compte SMTP utilisé pour l'envoi (ou variable d'env SMTP_USER)
-    --smtp-password PASSWORD    Mot de passe / mot de passe d'application SMTP (ou variable d'env SMTP_PASSWORD)
-    --email-to ADDRESS          Adresse email destinataire (ou variable d'env EMAIL_TO)
-    --message TEXT              Message additionnel optionnel (ex: version, environnement)
-    -h, --help                   Affiche cette aide
+    --env ENVIRONMENT        Environnement concerne (ex: production, staging)
+    --message TEXT           Message additionnel (ex: raison d'un echec)
+    -h, --help                Affiche cette aide
 ```
 
-`--status` et `--app` sont **obligatoires**. Les paramètres SMTP (`--smtp-server`, `--smtp-port`, `--smtp-user`, `--smtp-password`, `--email-to`) peuvent être omis s'ils sont fournis via les variables d'environnement correspondantes (`SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_TO`) — c'est la méthode recommandée en CI/CD pour ne jamais exposer le mot de passe en clair.
+`--status` et `--app` sont **obligatoires**. Les 5 variables SMTP doivent **toutes** être définies dans l'environnement — jamais passées en argument (pour ne jamais les exposer dans l'historique shell ou les logs CI). `--env` et `--message` sont optionnels.
 
 ### 9.3 Exemples
 
 ```bash
-# Notification de succès (config SMTP via variables d'environnement, recommandé)
+# Notification de succès
 export SMTP_SERVER=smtp.gmail.com
 export SMTP_PORT=587
-export SMTP_USER=hamza.erradi.64@edu.uiz.ac.ma
-export SMTP_PASSWORD="$SMTP_APP_PASSWORD"   # jamais la valeur en clair dans le script
-export EMAIL_TO=hamza.erradi@tython.org
+export SMTP_USER=alertes@example.com
+export SMTP_PASSWORD='mot-de-passe-application'
+export EMAIL_TO=equipe@example.com
 
-scripts/deploy-notify.sh --status success --app mon-app --env test
+scripts/deploy-notify.sh --status success --app mon-app --env production
 
 # Notification d'échec avec message additionnel
-scripts/deploy-notify.sh --status failure --app mon-app --env production \
+scripts/deploy-notify.sh --status failure --app mon-app --env staging \
   --message "Rollout timeout après 180s sur namespace production"
-
-# Tout en arguments explicites, sans variables d'environnement
-scripts/deploy-notify.sh --status success --app mon-app --env test \
-  --smtp-server smtp.gmail.com --smtp-port 587 \
-  --smtp-user hamza.erradi.64@edu.uiz.ac.ma --smtp-password "$SMTP_APP_PASSWORD" \
-  --email-to hamza.erradi@tython.org
 ```
+
+> **Mot de passe d'application Gmail** : avec un compte Gmail, `SMTP_PASSWORD` doit être un **mot de passe d'application** dédié (généré depuis les paramètres de sécurité Google), jamais le mot de passe principal du compte. Ce mot de passe doit être traité comme un secret : ne jamais le committer, ne jamais le laisser dans un historique partagé, et le régénérer s'il a pu fuiter (par exemple copié-collé dans un chat, un ticket, ou une capture d'écran).
 
 ### 9.4 Utilisation typique en fin de pipeline
 
 ```bash
 if scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180; then
-    scripts/deploy-notify.sh --status success --app mon-app --env prod
+    scripts/deploy-notify.sh --status success --app mon-app --env production
 else
-    scripts/deploy-notify.sh --status failure --app mon-app --env prod --message "Rollout échoué"
+    scripts/deploy-notify.sh --status failure --app mon-app --env production \
+        --message "Rollout échoué"
     exit 1
 fi
 ```
@@ -525,15 +527,17 @@ fi
 ### 9.5 Comportements de validation
 
 - `--status` doit être `success` ou `failure`, sinon échec immédiat
-- Si les paramètres SMTP requis (serveur, port, utilisateur, mot de passe, destinataire) ne sont fournis ni en arguments ni via les variables d'environnement correspondantes → échec immédiat avec message explicite
-- Le corps et le sujet de l'email s'adaptent automatiquement au statut (`success`/`failure`) et à l'environnement (`--env`) fournis
+- `--app` est obligatoire, sinon échec immédiat
+- Si une ou plusieurs variables SMTP (`SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_TO`) sont absentes → échec immédiat, avec la liste précise des variables manquantes
+- L'email envoyé varie selon `--status` : objet et emoji distincts pour succès (✅) et échec (❌)
+- Un fichier temporaire contenant le corps du message est créé puis supprimé systématiquement (succès comme échec), pour ne jamais laisser de résidu sur le disque
 
 ### 9.6 Codes de sortie
 
 | Code | Signification |
 |---|---|
-| `0` | Email envoyé avec succès (le serveur SMTP a accepté l'envoi) |
-| `1` | Paramètre invalide/manquant, ou échec de connexion/envoi SMTP |
+| `0` | Email envoyé avec succès |
+| `1` | Paramètre invalide/manquant, variable SMTP manquante, ou échec d'envoi de l'email |
 
 ---
 
@@ -561,23 +565,25 @@ set -euo pipefail
 
 export SMTP_SERVER=smtp.gmail.com
 export SMTP_PORT=587
-export SMTP_USER=hamza.erradi.64@edu.uiz.ac.ma
-export SMTP_PASSWORD="$SMTP_APP_PASSWORD"
-export EMAIL_TO=hamza.erradi@tython.org
+export SMTP_USER=alertes@example.com
+export SMTP_PASSWORD="$SMTP_PASSWORD"   # injecté depuis un secret manager / CI
+export EMAIL_TO=equipe@example.com
 
 kubectl apply -f k8s/deployment.yaml
 
 if ./scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180; then
     if ./scripts/cluster-health.sh --namespace prod; then
-        ./scripts/deploy-notify.sh --status success --app mon-app --env prod
+        ./scripts/deploy-notify.sh --status success --app mon-app --env production
         echo "Déploiement réussi, exécution des tests de fumée..."
         ./smoke-tests.sh
     else
-        ./scripts/deploy-notify.sh --status failure --app mon-app --env prod --message "Cluster en erreur après déploiement"
+        ./scripts/deploy-notify.sh --status failure --app mon-app --env production \
+            --message "Cluster en erreur après déploiement"
         exit 1
     fi
 else
-    ./scripts/deploy-notify.sh --status failure --app mon-app --env prod --message "Rollout échoué ou timeout"
+    ./scripts/deploy-notify.sh --status failure --app mon-app --env production \
+        --message "Rollout échoué ou timeout"
     kubectl rollout undo deployment/mon-app -n prod
     exit 1
 fi
@@ -636,16 +642,16 @@ jobs:
       - name: Notifier le résultat par email
         if: always()
         env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SERVER: smtp.gmail.com
+          SMTP_PORT: 587
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
           if [ "${{ job.status }}" = "success" ]; then
-            /tmp/toolkit/scripts/deploy-notify.sh --status success --app mon-app --env prod
+            /tmp/toolkit/scripts/deploy-notify.sh --status success --app mon-app --env production
           else
-            /tmp/toolkit/scripts/deploy-notify.sh --status failure --app mon-app --env prod
+            /tmp/toolkit/scripts/deploy-notify.sh --status failure --app mon-app --env production
           fi
 
       - name: Publier le rapport
@@ -666,12 +672,12 @@ deploy:
     - /tmp/toolkit/scripts/wait-for-rollout.sh --name mon-app --namespace prod --timeout 180
     - /tmp/toolkit/scripts/cluster-health.sh --namespace prod
   after_script:
-    - /tmp/toolkit/scripts/deploy-notify.sh --status "$CI_JOB_STATUS" --app mon-app --env prod
+    - /tmp/toolkit/scripts/deploy-notify.sh --status "$CI_JOB_STATUS" --app mon-app --env production
   only:
     - main
 ```
 
-> Les variables `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` et `EMAIL_TO` doivent être définies comme variables CI/CD protégées (Settings → CI/CD → Variables), jamais écrites en clair dans le fichier `.gitlab-ci.yml`.
+> `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` et `EMAIL_TO` doivent être définis comme variables CI/CD protégées (masquées dans les logs), jamais en clair dans le fichier `.gitlab-ci.yml`.
 
 ### 11.4 Exploiter la sortie JSON dans un script d'alerte
 
@@ -682,7 +688,7 @@ ISSUES=$(jq '[.[] | select(.status == "issues_detected")] | length' /tmp/health.
 
 if [[ "$ISSUES" -gt 0 ]]; then
     jq -r '.[] | select(.status == "issues_detected") | .context' /tmp/health.json
-    # envoyer une alerte email ici
+    # envoyer une alerte par email ici, via deploy-notify.sh ou un autre mécanisme
 fi
 ```
 
@@ -697,7 +703,7 @@ cleanup-logs:
     - schedules
 ```
 
-> En CI/CD, `--es-password` et les identifiants SMTP (`SMTP_PASSWORD` notamment) doivent toujours provenir de variables secrètes du pipeline, jamais écrites en clair dans le fichier de configuration.
+> En CI/CD, `--es-password` et `SMTP_PASSWORD` doivent toujours provenir de variables secrètes du pipeline, jamais écrites en clair dans le fichier de configuration.
 
 ---
 
@@ -707,9 +713,9 @@ cleanup-logs:
 
 - **Lecture seule pour `cluster-health.sh` et `wait-for-rollout.sh`** : ces deux scripts n'exécutent que des opérations `get`/`list`/`rollout status`, aucun risque de modification du cluster
 - **`log-cleaner.sh` supprime réellement des données (journald, Elasticsearch, Loki), mais uniquement avec `--apply` explicite** : le mode par défaut est un dry-run qui n'exécute jamais d'action destructive
-- **`deploy-notify.sh` n'a aucun accès au cluster** : simple envoi d'email via une connexion SMTP sortante vers le serveur configuré
-- **Zéro secret en dur** dans le code — identifiants (`--es-password`, `SMTP_PASSWORD`) passés en argument ou variable d'environnement, jamais codés en dur
-- **Quoting strict** de toutes les entrées utilisateur (`--context`, `--namespace`, `--name`, `--es-*`, `--loki-*`, `--smtp-*`, `--email-to`) dans les appels `kubectl`/`curl`/SMTP, empêchant l'injection de commande
+- **`deploy-notify.sh` n'a aucun accès au cluster** : simple envoi d'email via SMTP
+- **Zéro secret en argument** dans le code — identifiants (`--es-password`, `SMTP_PASSWORD`) passés uniquement en variable d'environnement, jamais codés en dur, et pour `deploy-notify.sh` les identifiants SMTP ne sont **acceptés que via l'environnement**, pas via un flag `--password`, précisément pour éviter qu'ils apparaissent dans l'historique shell (`.bash_history`) ou les logs de process
+- **Quoting strict** de toutes les entrées utilisateur (`--context`, `--namespace`, `--name`, `--es-*`, `--loki-*`) dans les appels `kubectl`/`curl`, empêchant l'injection de commande
 - **Scan automatique des secrets** (Gitleaks) à chaque push via la CI
 
 ### 12.2 Permissions minimales (RBAC)
@@ -734,9 +740,9 @@ rules:
 
 - Toujours cloner et lire le code avant exécution — jamais de `curl ... | bash`
 - Vérifier la syntaxe avant tout usage en production : `bash -n scripts/nom-du-script.sh`
-- Ne jamais committer de kubeconfig, de token, de mot de passe SMTP ou d'adresse destinataire sensible dans le repo
+- Ne jamais committer de kubeconfig, de token, de mot de passe SMTP/Elasticsearch dans le repo
+- Ne jamais exporter `SMTP_PASSWORD` en clair dans un terminal partagé ou collé dans un ticket/chat — utiliser un gestionnaire de secrets, et régénérer le mot de passe d'application s'il a pu être exposé
 - Pour `log-cleaner.sh`, toujours tester en dry-run avant tout `--apply` (voir [8.9](#89-recommandations-avant-dutiliser---apply))
-- Pour `deploy-notify.sh`, utiliser de préférence un **mot de passe d'application** dédié (Gmail, etc.) plutôt que le mot de passe principal du compte, et le stocker uniquement dans un secret manager ou les secrets CI/CD
 
 ### 12.4 Protection de la branche `main`
 
@@ -760,7 +766,7 @@ k8s-ops-toolkit/
 │   ├── cluster-health.sh        # ✅ Fonctionnel
 │   ├── wait-for-rollout.sh      # ✅ Fonctionnel
 │   ├── log-cleaner.sh           # ✅ Fonctionnel (journald, ES, Loki)
-│   └── deploy-notify.sh         # ✅ Fonctionnel (email/SMTP)
+│   └── deploy-notify.sh         # ✅ Fonctionnel (notification email/SMTP)
 ├── lib/
 │   └── common.sh                # Fonctions partagées
 ├── examples/
@@ -794,6 +800,7 @@ Centraliser ces fonctions évite de dupliquer le code de logging dans chaque scr
 - Toutes les variables utilisateur sont quotées (`"$VAR"`, `"${ARRAY[@]}"`) pour éviter l'injection
 - Codes de sortie standardisés : `0` = succès, `1` = problème détecté ou erreur d'usage
 - Pour les scripts pouvant supprimer des données (`log-cleaner.sh`), toute action destructive est isolée derrière un flag explicite (`--apply`), jamais exécutée par défaut
+- Pour `deploy-notify.sh`, les identifiants sensibles (SMTP) ne sont acceptés **que** via variables d'environnement, jamais via un flag en ligne de commande
 
 ---
 
@@ -830,7 +837,7 @@ Exécuté automatiquement en CI à chaque push.
 | `cluster-health.sh` | Aide, option invalide, incompatibilité `--context`/`--all-contexts`, `--json` sans erreur |
 | `wait-for-rollout.sh` | Aide, `--name` obligatoire, type de ressource invalide, option invalide |
 | `log-cleaner.sh` | Aide, `--target` invalide, `--age` invalide, options spécifiques manquantes par cible, comportement dry-run par défaut |
-| `deploy-notify.sh` | Aide, `--status` invalide, configuration SMTP manquante (args et variables d'env), envoi réussi/échoué simulé |
+| `deploy-notify.sh` | Aide, `--status` invalide, `--app` obligatoire, détection précise de chaque variable SMTP manquante, envoi réussi/échoué (curl stubbé) |
 
 ### 14.5 CI/CD du projet
 
@@ -855,8 +862,8 @@ Exécuté automatiquement en CI à chaque push.
 | Push git rejeté (`non-fast-forward`) | Historique local et distant divergents | `git config pull.rebase false && git pull origin main` puis `git push` |
 | `SC2086` (shellcheck) sur une variable non quotée | Variable utilisée sans guillemets dans une commande | Toujours quoter : `"$VAR"` au lieu de `$VAR` |
 | JSON de `cluster-health.sh` ne montre qu'un seul contexte avec `--all-contexts` | Un seul contexte présent dans le kubeconfig | Normal si un seul cluster est configuré — pas un bug |
-| `deploy-notify.sh` échoue avec "configuration SMTP manquante" | Un ou plusieurs paramètres SMTP (`--smtp-server`, `--smtp-user`, `--smtp-password`, `--email-to`) absents en argument et en variable d'environnement | Exporter les variables `SMTP_SERVER`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASSWORD`/`EMAIL_TO`, ou les passer explicitement en arguments |
-| `deploy-notify.sh` échoue avec une erreur d'authentification SMTP | Mot de passe principal du compte utilisé au lieu d'un mot de passe d'application (cas fréquent avec Gmail) | Générer un mot de passe d'application dédié dans les paramètres de sécurité du compte, et l'utiliser via `SMTP_PASSWORD` |
+| `deploy-notify.sh` échoue avec "Variables d'environnement manquantes" | Une ou plusieurs des 5 variables SMTP ne sont pas exportées | Exporter `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_TO` avant d'appeler le script |
+| `deploy-notify.sh` échoue avec "Echec de l'envoi de l'email" | Serveur SMTP injoignable, port bloqué, ou mot de passe d'application invalide/expiré | Vérifier `SMTP_SERVER`/`SMTP_PORT`, régénérer le mot de passe d'application Gmail si besoin |
 | "Bypassed rule violations" à chaque push | Comportement normal : admin qui contourne légitimement la branch protection | Rien à corriger — voir section 12.4 |
 
 ---
@@ -871,13 +878,14 @@ Exécuté automatiquement en CI à chaque push.
 | 3 | `cluster-health.sh` V3 — `--all-contexts` + `--json` | ✅ Fait |
 | 4 | `wait-for-rollout.sh` | ✅ Fait, validé sur clusters réels |
 | 5 | `log-cleaner.sh` (journald, Elasticsearch, Loki, dry-run par défaut) | ✅ Fait, les 3 cibles validées, tests bats complets |
-| 6 | `deploy-notify.sh` (notifications par email/SMTP) | ✅ Fait |
+| 6 | `deploy-notify.sh` (notification par email/SMTP) | ✅ Fait, envoi réel validé via Gmail SMTP |
 | 7 | CI/CD complet (shellcheck, bats, Gitleaks, branch protection) | ✅ Fait, 3 jobs verts |
 | 8 | Documentation finale et présentation portfolio | ✅ Fait |
 
 **Progression : 9/9 phases terminées. Projet complet.**
 
 ### Évolutions futures envisagées (hors périmètre initial)
+- Support de canaux additionnels pour `deploy-notify.sh` (Slack/Discord en complément de l'email)
 - Mode `--watch` pour un monitoring continu (au lieu d'un snapshot ponctuel)
 - Export de métriques vers Prometheus (textfile collector)
 - Fichier de configuration YAML pour seuils personnalisés
@@ -885,7 +893,7 @@ Exécuté automatiquement en CI à chaque push.
 - Tests d'intégration sur un second type de cluster (minikube) en plus de kubeadm/K3s
 
 ### Pitch pour CV / entretien
-> Développement d'une suite d'outils CLI Bash open source (K8s-Ops-Toolkit) automatisant la supervision multi-cluster Kubernetes — santé de cluster, attente de rollout, nettoyage de logs (journald/Elasticsearch/Loki), notifications de déploiement par email — intégrée en CI/CD avec tests automatisés (bats), lint (shellcheck) et scan de sécurité (Gitleaks).
+> Développement d'une suite d'outils CLI Bash open source (K8s-Ops-Toolkit) automatisant la supervision multi-cluster Kubernetes — santé de cluster, attente de rollout, nettoyage de logs (journald/Elasticsearch/Loki), notifications de déploiement par email (SMTP) — intégrée en CI/CD avec tests automatisés (bats), lint (shellcheck) et scan de sécurité (Gitleaks).
 
 ---
 
