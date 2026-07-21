@@ -157,7 +157,7 @@ check_cluster() {
                 split(reasons[$1], seen, ", ")
                 found = 0
                 for (i in seen) if (seen[i] == $2) found = 1
-                if (!found) reasons[$1] = reasons[$1] ", " $2 : $2
+                if (!found) reasons[$1] = reasons[$1] ? reasons[$1] ", " $2 : $2
             }
             END { for (pod in reasons) print pod ": " reasons[pod] }
         ' | sort)
